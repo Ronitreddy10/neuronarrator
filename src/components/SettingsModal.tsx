@@ -7,27 +7,35 @@
    onClose: () => void;
  }
  
- const API_KEY_STORAGE_KEY = "neuronarrator_gemini_api_key";
+const API_KEY_STORAGE_KEY = "neuronarrator_gemini_api_key";
  const GROQ_API_KEY_STORAGE_KEY = "neuronarrator_groq_api_key";
+const GROQ_MODEL_STORAGE_KEY = "neuronarrator_groq_model";
  
  export const getStoredApiKey = (): string => {
    return localStorage.getItem(GROQ_API_KEY_STORAGE_KEY) || "";
  };
+
+export const getStoredVisionModel = (): string => {
+  return localStorage.getItem(GROQ_MODEL_STORAGE_KEY) || "";
+};
  
  export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
    const [apiKey, setApiKey] = useState("");
+  const [modelId, setModelId] = useState("");
    const [showKey, setShowKey] = useState(false);
    const [saved, setSaved] = useState(false);
  
    useEffect(() => {
      if (isOpen) {
        setApiKey(getStoredApiKey());
+      setModelId(getStoredVisionModel());
        setSaved(false);
      }
    }, [isOpen]);
  
    const handleSave = () => {
      localStorage.setItem(GROQ_API_KEY_STORAGE_KEY, apiKey.trim());
+    localStorage.setItem(GROQ_MODEL_STORAGE_KEY, modelId.trim());
      setSaved(true);
      setTimeout(() => {
        onClose();
@@ -36,7 +44,9 @@
  
    const handleClear = () => {
      localStorage.removeItem(GROQ_API_KEY_STORAGE_KEY);
+    localStorage.removeItem(GROQ_MODEL_STORAGE_KEY);
      setApiKey("");
+    setModelId("");
      setSaved(false);
    };
  
@@ -92,6 +102,25 @@
                )}
              </button>
            </div>
+
+            <div className="space-y-2 pt-2">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <span className="text-sm font-medium">Vision model</span>
+              </div>
+              <input
+                type="text"
+                value={modelId}
+                onChange={(e) => {
+                  setModelId(e.target.value);
+                  setSaved(false);
+                }}
+                placeholder="Paste Groq vision model id"
+                className="w-full h-11 px-4 rounded-xl bg-surface-elevated border border-glass-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ios-blue transition-colors text-sm"
+              />
+              <p className="text-xs text-muted-foreground">
+                If you see “model does not exist”, copy the recommended vision model ID from the Groq deprecations page and paste it here.
+              </p>
+            </div>
  
            <p className="text-xs text-muted-foreground">
              Get your API key from{" "}
@@ -115,7 +144,7 @@
              </button>
              <button
                onClick={handleSave}
-               disabled={!apiKey.trim()}
+                disabled={!apiKey.trim()}
                className={cn(
                  "flex-1 h-11 rounded-xl font-medium text-sm transition-all flex items-center justify-center gap-2",
                  saved
