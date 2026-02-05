@@ -92,6 +92,12 @@ export const useNeuroVoice = () => {
          throw error;
        }
  
+       // Handle rate limiting gracefully - fall back to browser TTS
+       if (data?.rateLimited) {
+         console.warn("TTS rate limited, using browser fallback");
+         throw new Error("Rate limited");
+       }
+
        if (!data?.audioBase64) {
          console.error("No audio data returned");
          throw new Error("No audio data");
