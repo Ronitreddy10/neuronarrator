@@ -137,6 +137,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
 
         console.log('All face recognition models loaded successfully');
         setIsModelsLoaded(true);
+        setIsLoadingModels(false);
         setModelLoadError(null);
         
         // Load stored faces after models are ready
