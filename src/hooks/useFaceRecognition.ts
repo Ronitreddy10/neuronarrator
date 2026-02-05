@@ -40,6 +40,7 @@ export interface UseFaceRecognitionReturn {
   detectAndMatch: (videoElement: HTMLVideoElement) => Promise<FaceMatch | null>;
   registerCurrentFace: (name: string, relation: RelationType) => Promise<boolean>;
   loadModels: () => Promise<void>;
+  retryLoadModels: () => Promise<void>;
   refreshStoredFaces: () => Promise<void>;
   clearAllFaces: () => Promise<void>;
   generateSpeechText: (match: FaceMatch) => string;
@@ -110,34 +111,53 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
     }
   }, []);
 
-  // Load face-api.js models
+  // Load face-api.js models with retry logic for mobile
   const loadModels = useCallback(async () => {
     if (isModelsLoaded || isLoadingModels) return;
 
     setIsLoadingModels(true);
     setModelLoadError(null);
 
-    try {
-      console.log('Loading face recognition models from:', MODEL_URL);
+    const maxRetries = 3;
+    let lastError: Error | null = null;
 
-      await Promise.all([
-        faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-      ]);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Loading face recognition models (attempt ${attempt}/${maxRetries}) from:`, MODEL_URL);
 
-      console.log('Face recognition models loaded successfully');
-      setIsModelsLoaded(true);
-      
-      // Load stored faces after models are ready
-      await refreshStoredFaces();
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Failed to load models';
-      console.error('Error loading face models:', error);
-      setModelLoadError(errorMsg);
-    } finally {
-      setIsLoadingModels(false);
+        // Load models sequentially on mobile to avoid memory issues
+        await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
+        console.log('SSD MobileNet loaded');
+        
+        await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+        console.log('Face Landmark model loaded');
+        
+        await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+        console.log('Face Recognition model loaded');
+
+        console.log('All face recognition models loaded successfully');
+        setIsModelsLoaded(true);
+        setModelLoadError(null);
+        
+        // Load stored faces after models are ready
+        await refreshStoredFaces();
+        return; // Success - exit the retry loop
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('Failed to load models');
+        console.error(`Model loading attempt ${attempt} failed:`, error);
+        
+        if (attempt < maxRetries) {
+          // Wait before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      }
     }
+
+    // All retries failed
+    const errorMsg = lastError?.message || 'Failed to load face recognition models';
+    console.error('All model loading attempts failed:', errorMsg);
+    setModelLoadError(`${errorMsg}. Check your internet connection and try again.`);
+    setIsLoadingModels(false);
   }, [isModelsLoaded, isLoadingModels, refreshStoredFaces]);
 
   // Generate contextual speech text for a match
@@ -331,6 +351,15 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
     }
   }, [refreshStoredFaces]);
 
+  // Force retry loading models (resets error state first)
+  const retryLoadModels = useCallback(async () => {
+    setModelLoadError(null);
+    setIsLoadingModels(false);
+    // Small delay to reset state
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await loadModels();
+  }, [loadModels]);
+
   return {
     isModelsLoaded,
     isLoadingModels,
@@ -342,6 +371,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
     detectAndMatch,
     registerCurrentFace,
     loadModels,
+    retryLoadModels,
     refreshStoredFaces,
     clearAllFaces,
     generateSpeechText
