@@ -31,6 +31,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
   const [lastCommand, setLastCommand] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
   const isStoppedManuallyRef = useRef(false);
+  const isRunningRef = useRef(false);
 
   const startListening = useCallback(() => {
     // Check browser support
@@ -41,6 +42,8 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
     }
 
     // Don't restart if already running
+    if (isRunningRef.current) return;
+    
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -54,8 +57,9 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
     recognition.maxAlternatives = 3;
 
     recognition.onstart = () => {
+      isRunningRef.current = true;
       setIsListening(true);
-      console.log("Voice command listener active - say 'Neuro remember [name]'");
+      console.log("Voice command listener started");
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -118,16 +122,17 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
     };
 
     recognition.onend = () => {
+      isRunningRef.current = false;
       setIsListening(false);
-      // Auto-restart unless manually stopped
+      // Auto-restart unless manually stopped — longer delay to avoid spam
       if (!isStoppedManuallyRef.current && enabled) {
         setTimeout(() => {
-          if (!isStoppedManuallyRef.current && enabled) {
+          if (!isStoppedManuallyRef.current && enabled && !isRunningRef.current) {
             try {
               recognition.start();
             } catch (_) {}
           }
-        }, 300);
+        }, 1000);
       }
     };
 
@@ -143,6 +148,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
 
   const stopListening = useCallback(() => {
     isStoppedManuallyRef.current = true;
+    isRunningRef.current = false;
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
