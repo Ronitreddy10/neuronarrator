@@ -1,88 +1,135 @@
- import { useCallback, useRef } from "react";
+ import { useCallback, useRef, useState } from "react";
+ import { supabase } from "@/integrations/supabase/client";
  
  interface SpeakOptions {
    priority?: number;
    rate?: number;
    pitch?: number;
+   speaker?: "anushka" | "abhilash";
   onEnd?: () => void;
  }
  
  export const useNeuroVoice = () => {
-   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+   const audioRef = useRef<HTMLAudioElement | null>(null);
   const onEndCallbackRef = useRef<(() => void) | null>(null);
+   const [isLoading, setIsLoading] = useState(false);
  
-   const speak = useCallback((text: string, priority: number = 5, options: SpeakOptions = {}) => {
+   const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
     // If there's nothing to say, don't stall smart-loop callers waiting for onend.
     if (!text || !text.trim()) {
       if (options.onEnd) options.onEnd();
       return;
     }
 
-     if (!window.speechSynthesis) {
-       console.warn("Speech synthesis not supported");
-      // Still call onEnd if provided, so the loop can continue
-      if (options.onEnd) {
-        options.onEnd();
-      }
-       return;
-     }
- 
      // High priority (10) cancels current speech immediately
      if (priority >= 10) {
-       window.speechSynthesis.cancel();
+       if (audioRef.current) {
+         audioRef.current.pause();
+         audioRef.current.currentTime = 0;
+         audioRef.current = null;
+       }
      }
  
-     const utterance = new SpeechSynthesisUtterance(text);
-     
-     // Configure voice settings for a calm, professional tone
-     utterance.rate = options.rate ?? 0.9;
-     utterance.pitch = options.pitch ?? 1.0;
-     utterance.volume = 1.0;
+     onEndCallbackRef.current = options.onEnd || null;
+     setIsLoading(true);
  
-     // Try to get a good English voice
-     const voices = window.speechSynthesis.getVoices();
-     const preferredVoice = voices.find(
-       (voice) => voice.lang.startsWith("en") && voice.name.includes("Samantha")
-     ) || voices.find(
-       (voice) => voice.lang.startsWith("en-US")
-     ) || voices[0];
+     try {
+       const { data, error } = await supabase.functions.invoke('text-to-speech', {
+         body: {
+           text,
+           speaker: options.speaker ?? "anushka",
+         },
+       });
  
-     if (preferredVoice) {
-       utterance.voice = preferredVoice;
+       if (error) {
+         console.error("TTS edge function error:", error);
+         throw error;
+       }
+ 
+       if (!data?.audioBase64) {
+         console.error("No audio data returned");
+         throw new Error("No audio data");
+       }
+ 
+       // Create audio from base64
+       const audioBlob = await fetch(`data:audio/wav;base64,${data.audioBase64}`).then(r => r.blob());
+       const audioUrl = URL.createObjectURL(audioBlob);
+       const audio = new Audio(audioUrl);
+       audioRef.current = audio;
+ 
+       audio.onended = () => {
+         URL.revokeObjectURL(audioUrl);
+         if (onEndCallbackRef.current) {
+           onEndCallbackRef.current();
+           onEndCallbackRef.current = null;
+         }
+         setIsLoading(false);
+       };
+ 
+       audio.onerror = (e) => {
+         console.warn("Audio playback error:", e);
+         URL.revokeObjectURL(audioUrl);
+         if (onEndCallbackRef.current) {
+           onEndCallbackRef.current();
+           onEndCallbackRef.current = null;
+         }
+         setIsLoading(false);
+       };
+ 
+       await audio.play();
+     } catch (err) {
+       console.error("Sarvam TTS failed, falling back to browser TTS:", err);
+       setIsLoading(false);
+ 
+       // Fallback to browser TTS
+       if (window.speechSynthesis) {
+         const utterance = new SpeechSynthesisUtterance(text);
+         utterance.rate = options.rate ?? 0.9;
+         utterance.pitch = options.pitch ?? 1.0;
+         utterance.volume = 1.0;
+ 
+         utterance.onend = () => {
+           if (onEndCallbackRef.current) {
+             onEndCallbackRef.current();
+             onEndCallbackRef.current = null;
+           }
+         };
+ 
+         utterance.onerror = () => {
+           if (onEndCallbackRef.current) {
+             onEndCallbackRef.current();
+             onEndCallbackRef.current = null;
+           }
+         };
+ 
+         window.speechSynthesis.speak(utterance);
+       } else {
+         // No fallback available, trigger callback anyway
+         if (onEndCallbackRef.current) {
+           onEndCallbackRef.current();
+           onEndCallbackRef.current = null;
+         }
+       }
      }
- 
-    // Set up onend callback for smart loop
-    onEndCallbackRef.current = options.onEnd || null;
-    utterance.onend = () => {
-      if (onEndCallbackRef.current) {
-        onEndCallbackRef.current();
-        onEndCallbackRef.current = null;
-      }
-    };
-
-    // Also handle errors - still trigger callback so loop doesn't stall
-    utterance.onerror = (event) => {
-      console.warn("Speech synthesis error:", event.error);
-      if (onEndCallbackRef.current) {
-        onEndCallbackRef.current();
-        onEndCallbackRef.current = null;
-      }
-    };
-
-     utteranceRef.current = utterance;
-     window.speechSynthesis.speak(utterance);
    }, []);
  
    const stop = useCallback(() => {
-     if (window.speechSynthesis) {
-       window.speechSynthesis.cancel();
+     if (audioRef.current) {
+       audioRef.current.pause();
+       audioRef.current.currentTime = 0;
+       audioRef.current = null;
      }
+     window.speechSynthesis?.cancel();
     onEndCallbackRef.current = null;
+     setIsLoading(false);
    }, []);
  
    const isSpeaking = useCallback(() => {
+     if (audioRef.current && !audioRef.current.paused) {
+       return true;
+     }
      return window.speechSynthesis?.speaking ?? false;
    }, []);
  
-   return { speak, stop, isSpeaking };
+   return { speak, stop, isSpeaking, isLoading };
  };
