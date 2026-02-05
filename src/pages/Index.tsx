@@ -58,10 +58,14 @@ const Index = () => {
     generateSpeechText
   } = useFaceRecognition();
 
-  // Load face recognition models on mount
+  // Load face recognition models lazily — don't block app startup on mobile
+  const modelsLoadedOnce = useRef(false);
   useEffect(() => {
-    loadModels();
-  }, [loadModels]);
+    if (isAutoCapturing && !modelsLoadedOnce.current) {
+      modelsLoadedOnce.current = true;
+      loadModels();
+    }
+  }, [isAutoCapturing, loadModels]);
 
   // Voice command handler — truly hands-free: runs face detection RIGHT NOW
   const handleVoiceRemember = useCallback(async (name: string) => {
@@ -128,16 +132,21 @@ const Index = () => {
     setAnalysisState("analyzing");
 
     try {
-      // Step 1: Run face detection on the current frame BEFORE vision API
+      // Step 1: Try face detection with a strict 3s timeout — skip on slow devices
       let knownFaces: KnownFaceInfo[] = [];
       const video = cameraRef.current?.getVideoElement();
       if (video && video.readyState >= 2 && isModelsLoaded) {
-        const match = await detectAndMatch(video);
-        if (match && match.known && match.context) {
-          knownFaces = [{
-            name: match.context.name,
-            relation: match.context.relation,
-          }];
+        try {
+          const faceTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
+          const match = await Promise.race([detectAndMatch(video), faceTimeout]);
+          if (match && match.known && match.context) {
+            knownFaces = [{
+              name: match.context.name,
+              relation: match.context.relation,
+            }];
+          }
+        } catch (faceErr) {
+          console.warn("Face detection skipped (too slow or error):", faceErr);
         }
       }
 
@@ -208,20 +217,7 @@ const Index = () => {
       stop();
       stopHaptic();
     } else {
-      try {
-        // CRITICAL: Request camera permission DIRECTLY in the tap handler
-        // iOS Safari requires getUserMedia within the user gesture call stack
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
-          audio: false,
-        });
-        // Stop the temporary stream — react-webcam will create its own
-        stream.getTracks().forEach(t => t.stop());
-      } catch (err) {
-        console.error("Camera permission denied:", err);
-        // Still proceed — react-webcam will show the error overlay
-      }
-
+      // Enable camera and start scanning
       setCameraEnabled(true);
       setIsAutoCapturing(true);
       isActiveRef.current = true;
