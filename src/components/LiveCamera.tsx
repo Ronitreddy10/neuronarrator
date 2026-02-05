@@ -10,7 +10,7 @@ interface LiveCameraProps {
   isAnalyzing: boolean;
   priority: number;
   smartLoopEnabled: boolean;
-  captureRequestId: number; // Increment this to trigger a new capture
+  captureRequestId: number;
 }
 
 export interface LiveCameraRef {
@@ -27,6 +27,8 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
 }, ref) => {
   const webcamRef = useRef<Webcam>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
+  const [cameraKey, setCameraKey] = useState(0); // Force remount on iOS
+  const [isFlipping, setIsFlipping] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const isCapturingRef = useRef(false);
   const lastCaptureRequestIdRef = useRef(0);
@@ -79,7 +81,6 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
 
   // Smart loop: respond to capture requests from parent
   useEffect(() => {
-    // Only capture if this is a new request and we're actively scanning
     if (
       isAutoCapturing && 
       smartLoopEnabled && 
@@ -98,46 +99,82 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
     }
   }, [isAutoCapturing]);
  
-   const flipCamera = () => {
-     setFacingMode((prev) => (prev === "user" ? "environment" : "user"));
-   };
+  // iOS-compatible camera flip - completely remount the component
+  const flipCamera = useCallback(async () => {
+    if (isFlipping) return;
+    
+    setIsFlipping(true);
+    
+    // Stop current stream if possible
+    const video = webcamRef.current?.video;
+    if (video && video.srcObject) {
+      const tracks = (video.srcObject as MediaStream).getTracks();
+      tracks.forEach(track => track.stop());
+    }
+    
+    // Toggle facing mode and force remount
+    setFacingMode(prev => prev === "user" ? "environment" : "user");
+    setCameraKey(prev => prev + 1);
+    
+    // Give time for remount
+    setTimeout(() => {
+      setIsFlipping(false);
+    }, 500);
+  }, [isFlipping]);
  
-   const videoConstraints = {
-    // Some browsers (notably iOS Safari) require a remount + ideal/exact facingMode shape
-    facingMode: { ideal: facingMode },
-     width: { ideal: 1920 },
-     height: { ideal: 1080 },
-   };
+  const videoConstraints = {
+    facingMode: facingMode,
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+  };
  
-   return (
-     <div className="fixed inset-0 z-0">
-       {/* Full-screen webcam */}
-       <Webcam
-        key={facingMode}
-         ref={webcamRef}
-         audio={false}
-         screenshotFormat="image/jpeg"
-         videoConstraints={videoConstraints}
+  return (
+    <div className="fixed inset-0 z-0">
+      {/* Full-screen webcam - key forces remount on flip */}
+      <Webcam
+        key={`camera-${cameraKey}-${facingMode}`}
+        ref={webcamRef}
+        audio={false}
+        screenshotFormat="image/jpeg"
+        videoConstraints={videoConstraints}
         onUserMediaError={(err) => console.error("Camera error:", err)}
-         className="absolute inset-0 w-full h-full object-cover"
-       />
- 
-       {/* Red flash overlay for high priority hazards */}
-       <div
-         className={cn(
-           "absolute inset-0 pointer-events-none transition-opacity duration-100",
-           priority >= 9 ? "bg-ios-red/30 animate-pulse" : "opacity-0"
-         )}
-       />
- 
-       {/* Camera flip button */}
-       <button
-         onClick={flipCamera}
-          className="absolute top-4 left-4 z-10 w-12 h-12 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center justify-center tactile-button"
-         aria-label="Switch camera"
-       >
-         <SwitchCamera className="w-6 h-6 text-foreground" />
-       </button>
+        className="absolute inset-0 w-full h-full object-cover"
+      />
+
+      {/* Flip transition overlay */}
+      <AnimatePresence>
+        {isFlipping && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black/50 flex items-center justify-center z-20"
+          >
+            <Loader2 className="w-8 h-8 text-white animate-spin" />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Red flash overlay for high priority hazards */}
+      <div
+        className={cn(
+          "absolute inset-0 pointer-events-none transition-opacity duration-100",
+          priority >= 9 ? "bg-ios-red/30 animate-pulse" : "opacity-0"
+        )}
+      />
+
+      {/* Camera flip button */}
+      <button
+        onClick={flipCamera}
+        disabled={isFlipping}
+        className={cn(
+          "absolute top-4 left-4 z-10 w-12 h-12 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center justify-center tactile-button",
+          isFlipping && "opacity-50"
+        )}
+        aria-label="Switch camera"
+      >
+        <SwitchCamera className={cn("w-6 h-6 text-foreground", isFlipping && "animate-spin")} />
+      </button>
  
         {/* Analyzing indicator */}
         <AnimatePresence>

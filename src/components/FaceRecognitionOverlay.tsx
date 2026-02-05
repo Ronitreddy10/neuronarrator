@@ -13,6 +13,7 @@ interface FaceRecognitionOverlayProps {
   storedFacesCount: number;
   onAddPerson: () => void;
   onClearFaces: () => void;
+  onRetryModels?: () => void;
   isVisible: boolean;
 }
 
@@ -25,6 +26,7 @@ export const FaceRecognitionOverlay = ({
   storedFacesCount,
   onAddPerson,
   onClearFaces,
+  onRetryModels,
   isVisible
 }: FaceRecognitionOverlayProps) => {
   if (!isVisible) return null;
@@ -50,7 +52,7 @@ export const FaceRecognitionOverlay = ({
         )}
       </AnimatePresence>
 
-      {/* Model Error */}
+      {/* Model Error with Retry */}
       <AnimatePresence>
         {modelLoadError && (
           <motion.div
@@ -59,8 +61,22 @@ export const FaceRecognitionOverlay = ({
             exit={{ opacity: 0, y: -10 }}
             className="glass-panel super-ellipse-sm p-3 border border-ios-red/30 bg-ios-red/10"
           >
-            <p className="text-sm font-medium text-ios-red">Model Load Failed</p>
-            <p className="text-xs text-muted-foreground">{modelLoadError}</p>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-ios-red">Model Load Failed</p>
+                <p className="text-xs text-muted-foreground truncate">{modelLoadError}</p>
+              </div>
+              {onRetryModels && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onRetryModels}
+                  className="shrink-0 border-ios-red/30 text-ios-red hover:bg-ios-red/10"
+                >
+                  Retry
+                </Button>
+              )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

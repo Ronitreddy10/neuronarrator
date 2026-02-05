@@ -51,6 +51,7 @@ const Index = () => {
     detectAndMatch,
     registerCurrentFace,
     loadModels,
+    retryLoadModels,
     clearAllFaces,
     generateSpeechText
   } = useFaceRecognition();
@@ -242,7 +243,8 @@ const Index = () => {
         storedFacesCount={storedFacesCount}
         onAddPerson={() => setAddPersonOpen(true)}
         onClearFaces={handleClearFaces}
-        isVisible={isAutoCapturing || isLoadingModels}
+        onRetryModels={retryLoadModels}
+        isVisible={isAutoCapturing || isLoadingModels || !!modelLoadError}
       />
 
       {/* Dynamic Island - elevated above camera */}
