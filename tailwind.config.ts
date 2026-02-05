@@ -65,6 +65,7 @@ export default {
         ios: {
           blue: "hsl(var(--ios-blue))",
           green: "hsl(var(--ios-green))",
+           red: "hsl(var(--ios-red))",
         },
         glass: {
           bg: "hsl(var(--glass-bg))",
