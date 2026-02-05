@@ -208,19 +208,31 @@ const Index = () => {
       stop();
       stopHaptic();
     } else {
-      // CRITICAL: Enable camera SYNCHRONOUSLY in the tap handler
-      // so getUserMedia fires within the user gesture on iOS Safari
+      try {
+        // CRITICAL: Request camera permission DIRECTLY in the tap handler
+        // iOS Safari requires getUserMedia within the user gesture call stack
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false,
+        });
+        // Stop the temporary stream — react-webcam will create its own
+        stream.getTracks().forEach(t => t.stop());
+      } catch (err) {
+        console.error("Camera permission denied:", err);
+        // Still proceed — react-webcam will show the error overlay
+      }
+
       setCameraEnabled(true);
       setIsAutoCapturing(true);
       isActiveRef.current = true;
       
-      // Audio unlock can happen async — it's for TTS, not camera
+      // Unlock audio for TTS (non-blocking)
       unlockAudioForMobile();
       
-      // Trigger first capture after a short delay to let camera initialize
+      // Trigger first capture after camera initializes
       setTimeout(() => {
         setCaptureRequestId(1);
-      }, 1500);
+      }, 2000);
     }
   };
 
