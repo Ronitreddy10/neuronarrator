@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { User, UserX, Brain, Loader2, UserPlus, Trash2 } from "lucide-react";
+import { User, UserX, Brain, Loader2, UserPlus, Trash2, Clock, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { FaceMatch } from "@/hooks/useFaceRecognition";
@@ -91,19 +91,34 @@ export const FaceRecognitionOverlay = ({
                   <UserX className="w-5 h-5 text-ios-orange" />
                 </div>
               )}
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <p className={cn(
-                  "text-lg font-semibold",
+                  "text-lg font-semibold truncate",
                   lastMatch.known ? "text-ios-green" : "text-ios-orange"
                 )}>
                   {lastMatch.name}
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  {lastMatch.known 
-                    ? `Confidence: ${lastMatch.distance ? ((1 - lastMatch.distance) * 100).toFixed(0) : 100}%`
-                    : "Face not recognized"
-                  }
-                </p>
+                {lastMatch.known && lastMatch.context ? (
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Users className="w-3 h-3" />
+                      {lastMatch.context.relation}
+                    </p>
+                    {lastMatch.context.isLongAbsence && (
+                      <p className="text-xs text-ios-orange flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        Last seen {lastMatch.context.daysSinceLastSeen} days ago
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Confidence: {lastMatch.distance ? ((1 - lastMatch.distance) * 100).toFixed(0) : 100}%
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Face not recognized
+                  </p>
+                )}
               </div>
               {!lastMatch.known && hasUnknownFace && (
                 <Button

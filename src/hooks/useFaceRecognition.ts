@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import * as faceapi from 'face-api.js';
-import { faceDB, type FaceRecord } from '@/lib/faceDatabase';
+import { faceDB, type FaceRecord, type RelationType } from '@/lib/faceDatabase';
 
 // Model CDN URL
 const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
@@ -8,12 +8,25 @@ const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
 // Match threshold - lower = stricter matching
 const MATCH_THRESHOLD = 0.6;
 
+// Time thresholds for contextual announcements
+const DAYS_THRESHOLD = 3; // Days before mentioning "haven't seen in X days"
+
+export interface FaceContext {
+  name: string;
+  relation: RelationType;
+  lastSeen: Date;
+  daysSinceLastSeen: number;
+  isLongAbsence: boolean; // > 3 days
+}
+
 export interface FaceMatch {
   name: string;
   known: boolean;
   descriptor?: Float32Array;
   distance?: number;
   id?: number;
+  // Extended context for known faces
+  context?: FaceContext;
 }
 
 export interface UseFaceRecognitionReturn {
@@ -25,10 +38,11 @@ export interface UseFaceRecognitionReturn {
   isProcessing: boolean;
   storedFacesCount: number;
   detectAndMatch: (videoElement: HTMLVideoElement) => Promise<FaceMatch | null>;
-  registerCurrentFace: (name: string) => Promise<boolean>;
+  registerCurrentFace: (name: string, relation: RelationType) => Promise<boolean>;
   loadModels: () => Promise<void>;
   refreshStoredFaces: () => Promise<void>;
   clearAllFaces: () => Promise<void>;
+  generateSpeechText: (match: FaceMatch) => string;
 }
 
 // Calculate Euclidean distance between two descriptors
@@ -41,6 +55,31 @@ function euclideanDistance(desc1: Float32Array, desc2: Float32Array): number {
     sum += diff * diff;
   }
   return Math.sqrt(sum);
+}
+
+// Calculate days between two dates
+function daysBetween(date1: Date, date2: Date): number {
+  const diffTime = Math.abs(date2.getTime() - date1.getTime());
+  return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+}
+
+// Format relation for speech (possessive form)
+function formatRelationForSpeech(relation: RelationType): string {
+  switch (relation) {
+    case 'Family':
+      return 'your family member';
+    case 'Friend':
+      return 'your friend';
+    case 'Doctor':
+      return 'your doctor';
+    case 'Colleague':
+      return 'your colleague';
+    case 'Stranger':
+      return 'a stranger';
+    case 'Acquaintance':
+    default:
+      return 'your acquaintance';
+  }
 }
 
 export function useFaceRecognition(): UseFaceRecognitionReturn {
@@ -100,6 +139,30 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       setIsLoadingModels(false);
     }
   }, [isModelsLoaded, isLoadingModels, refreshStoredFaces]);
+
+  // Generate contextual speech text for a match
+  const generateSpeechText = useCallback((match: FaceMatch): string => {
+    if (!match.known) {
+      // Unknown person - stay silent or subtle announcement
+      return 'An unknown person is present.';
+    }
+
+    if (!match.context) {
+      // Fallback if no context
+      return `${match.name} is here.`;
+    }
+
+    const { name, relation, daysSinceLastSeen, isLongAbsence } = match.context;
+    const relationText = formatRelationForSpeech(relation);
+
+    if (isLongAbsence) {
+      // Time-aware announcement
+      return `${name}, ${relationText}. You haven't seen them in ${daysSinceLastSeen} days.`;
+    } else {
+      // Standard announcement
+      return `${name}, ${relationText}, is here.`;
+    }
+  }, []);
 
   // Detect face and match against stored faces
   const detectAndMatch = useCallback(async (videoElement: HTMLVideoElement): Promise<FaceMatch | null> => {
@@ -163,15 +226,43 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       }
 
       if (bestMatch && bestDistance < MATCH_THRESHOLD) {
-        // Known face matched
+        // Calculate temporal context
+        const now = new Date();
+        const lastSeen = bestMatch.lastSeen instanceof Date 
+          ? bestMatch.lastSeen 
+          : new Date(bestMatch.lastSeen);
+        const daysSinceLastSeen = daysBetween(lastSeen, now);
+        
+        // Create context object
+        const context: FaceContext = {
+          name: bestMatch.name,
+          relation: bestMatch.relation || 'Acquaintance',
+          lastSeen,
+          daysSinceLastSeen,
+          isLongAbsence: daysSinceLastSeen >= DAYS_THRESHOLD
+        };
+
+        // Update lastSeen in database (async, don't block)
+        if (bestMatch.id) {
+          faceDB.updateLastSeen(bestMatch.id).catch(err => 
+            console.error('Failed to update lastSeen:', err)
+          );
+        }
+
+        // Known face matched with full context
         const knownMatch: FaceMatch = {
           name: bestMatch.name,
           known: true,
           distance: bestDistance,
-          id: bestMatch.id
+          id: bestMatch.id,
+          context
         };
         setLastMatch(knownMatch);
         setLastUnknownDescriptor(null);
+        
+        // Also refresh stored faces to get updated lastSeen for next cycle
+        refreshStoredFaces();
+        
         return knownMatch;
       } else {
         // Unknown face (no match or distance too high)
@@ -192,27 +283,35 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       isProcessingRef.current = false;
       setIsProcessing(false);
     }
-  }, [isModelsLoaded]);
+  }, [isModelsLoaded, refreshStoredFaces]);
 
-  // Register the current unknown face with a name
-  const registerCurrentFace = useCallback(async (name: string): Promise<boolean> => {
+  // Register the current unknown face with name and relationship
+  const registerCurrentFace = useCallback(async (name: string, relation: RelationType): Promise<boolean> => {
     if (!lastUnknownDescriptor) {
       console.warn('No unknown face to register');
       return false;
     }
 
     try {
-      await faceDB.addFace(name.trim(), lastUnknownDescriptor);
+      await faceDB.addFace(name.trim(), lastUnknownDescriptor, relation);
       await refreshStoredFaces();
       setLastUnknownDescriptor(null);
       
-      // Update lastMatch to reflect the newly registered face
+      // Update lastMatch to reflect the newly registered face with context
+      const now = new Date();
       setLastMatch({
         name: name.trim(),
-        known: true
+        known: true,
+        context: {
+          name: name.trim(),
+          relation,
+          lastSeen: now,
+          daysSinceLastSeen: 0,
+          isLongAbsence: false
+        }
       });
 
-      console.log(`Face registered as: ${name}`);
+      console.log(`Face registered as: ${name} (${relation})`);
       return true;
     } catch (error) {
       console.error('Error registering face:', error);
@@ -244,6 +343,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
     registerCurrentFace,
     loadModels,
     refreshStoredFaces,
-    clearAllFaces
+    clearAllFaces,
+    generateSpeechText
   };
 }
