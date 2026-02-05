@@ -1,31 +1,42 @@
- import { useRef, useState, useCallback, useEffect } from "react";
- import Webcam from "react-webcam";
+import { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef } from "react";
+import Webcam from "react-webcam";
 import { SwitchCamera, Loader2 } from "lucide-react";
- import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
- 
- interface LiveCameraProps {
+
+interface LiveCameraProps {
   onCapture: (base64: string) => Promise<void>;
-   isAutoCapturing: boolean;
-   isAnalyzing: boolean;
-   priority: number;
+  isAutoCapturing: boolean;
+  isAnalyzing: boolean;
+  priority: number;
   smartLoopEnabled: boolean;
   captureRequestId: number; // Increment this to trigger a new capture
- }
+}
+
+export interface LiveCameraRef {
+  getVideoElement: () => HTMLVideoElement | null;
+}
  
- export const LiveCamera = ({
-   onCapture,
-   isAutoCapturing,
-   isAnalyzing,
-   priority,
+export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
+  onCapture,
+  isAutoCapturing,
+  isAnalyzing,
+  priority,
   smartLoopEnabled,
   captureRequestId,
- }: LiveCameraProps) => {
-   const webcamRef = useRef<Webcam>(null);
-   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
-   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+}, ref) => {
+  const webcamRef = useRef<Webcam>(null);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const isCapturingRef = useRef(false);
   const lastCaptureRequestIdRef = useRef(0);
+
+  // Expose video element to parent via ref
+  useImperativeHandle(ref, () => ({
+    getVideoElement: () => {
+      return webcamRef.current?.video ?? null;
+    }
+  }), []);
  
   const captureFrame = useCallback(async () => {
     if (isCapturingRef.current) return;
@@ -157,6 +168,8 @@ import { AnimatePresence, motion } from "framer-motion";
             </motion.div>
           )}
         </AnimatePresence>
-     </div>
-   );
- };
+    </div>
+  );
+});
+
+LiveCamera.displayName = "LiveCamera";
