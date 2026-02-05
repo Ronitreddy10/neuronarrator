@@ -4,14 +4,20 @@
    priority?: number;
    rate?: number;
    pitch?: number;
+  onEnd?: () => void;
  }
  
  export const useNeuroVoice = () => {
    const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const onEndCallbackRef = useRef<(() => void) | null>(null);
  
    const speak = useCallback((text: string, priority: number = 5, options: SpeakOptions = {}) => {
      if (!window.speechSynthesis) {
        console.warn("Speech synthesis not supported");
+      // Still call onEnd if provided, so the loop can continue
+      if (options.onEnd) {
+        options.onEnd();
+      }
        return;
      }
  
@@ -39,6 +45,24 @@
        utterance.voice = preferredVoice;
      }
  
+    // Set up onend callback for smart loop
+    onEndCallbackRef.current = options.onEnd || null;
+    utterance.onend = () => {
+      if (onEndCallbackRef.current) {
+        onEndCallbackRef.current();
+        onEndCallbackRef.current = null;
+      }
+    };
+
+    // Also handle errors - still trigger callback so loop doesn't stall
+    utterance.onerror = (event) => {
+      console.warn("Speech synthesis error:", event.error);
+      if (onEndCallbackRef.current) {
+        onEndCallbackRef.current();
+        onEndCallbackRef.current = null;
+      }
+    };
+
      utteranceRef.current = utterance;
      window.speechSynthesis.speak(utterance);
    }, []);
@@ -47,6 +71,7 @@
      if (window.speechSynthesis) {
        window.speechSynthesis.cancel();
      }
+    onEndCallbackRef.current = null;
    }, []);
  
    const isSpeaking = useCallback(() => {
