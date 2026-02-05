@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { User, UserX, Brain, Loader2, UserPlus, Trash2, Clock, Users } from "lucide-react";
+import { User, UserX, Brain, Loader2, UserPlus, Trash2, Clock, Users, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { FaceMatch } from "@/hooks/useFaceRecognition";
@@ -15,6 +15,8 @@ interface FaceRecognitionOverlayProps {
   onClearFaces: () => void;
   onRetryModels?: () => void;
   isVisible: boolean;
+  isVoiceListening?: boolean;
+  lastVoiceCommand?: string | null;
 }
 
 export const FaceRecognitionOverlay = ({
@@ -27,7 +29,9 @@ export const FaceRecognitionOverlay = ({
   onAddPerson,
   onClearFaces,
   onRetryModels,
-  isVisible
+  isVisible,
+  isVoiceListening = false,
+  lastVoiceCommand,
 }: FaceRecognitionOverlayProps) => {
   if (!isVisible) return null;
 
@@ -77,6 +81,26 @@ export const FaceRecognitionOverlay = ({
                 </Button>
               )}
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Voice Command Listening Indicator */}
+      <AnimatePresence>
+        {isVoiceListening && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="glass-panel super-ellipse-sm px-3 py-2 flex items-center gap-2"
+          >
+            <Mic className="w-4 h-4 text-ios-green animate-pulse" />
+            <p className="text-xs text-muted-foreground flex-1">
+              {lastVoiceCommand 
+                ? <span className="text-ios-green font-medium">{lastVoiceCommand}</span>
+                : <>Say <span className="text-foreground font-medium">"Neuro remember [name]"</span> to save a face</>
+              }
+            </p>
           </motion.div>
         )}
       </AnimatePresence>
@@ -132,7 +156,7 @@ export const FaceRecognitionOverlay = ({
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    Face not recognized
+                    Face not recognized — say "Neuro remember [name]"
                   </p>
                 )}
               </div>

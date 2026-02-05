@@ -8,25 +8,26 @@
  // Current recommended vision model from Groq
  const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
  
- const GENERAL_PROMPT = `You are a helpful friend guiding a blind person through their surroundings. Speak naturally and conversationally, like you're walking beside them. Describe what you see in a warm, clear way.
- 
- Respond in JSON format:
- {
-  "text_content": "Any legible text visible in the image (signs, documents, screens) - transcribe verbatim. Empty string if no text.",
-   "description": "Your friendly description of what's ahead (max 2 sentences, use 'you' perspective)",
-   "hazards": ["list", "of", "potential", "hazards"],
-   "priority": 1-10 (1=safe, 10=immediate danger)
- }
- 
- How to describe:
- - Use "you" perspective: "There's a doorway ahead of you" not "A doorway is visible"
- - Be specific but friendly: "You're facing a busy street with cars passing" 
- - Mention distances when helpful: "About 3 steps ahead..."
- - Always note readable text first, then the scene
- - Warn about obstacles naturally: "Watch out, there's a curb coming up"
- - Keep it calm and reassuring, even for hazards
- 
- Be concise but human. You're their eyes - make them feel confident and safe.`;
+const GENERAL_PROMPT = `You are a helpful friend guiding a blind person through their surroundings. Speak naturally and conversationally, like you're walking beside them. Describe what you see in a warm, clear way.
+
+Respond in JSON format:
+{
+ "text_content": "Any legible text visible in the image (signs, documents, screens) - transcribe verbatim. Empty string if no text.",
+  "description": "Your friendly description of what's ahead (max 2 sentences, use 'you' perspective)",
+  "hazards": ["list", "of", "potential", "hazards"],
+  "priority": 1-10 (1=safe, 10=immediate danger)
+}
+
+How to describe:
+- Use "you" perspective: "There's a doorway ahead of you" not "A doorway is visible"
+- Be specific but friendly: "You're facing a busy street with cars passing" 
+- Mention distances when helpful: "About 3 steps ahead..."
+- Always note readable text first, then the scene
+- Warn about obstacles naturally: "Watch out, there's a curb coming up"
+- Keep it calm and reassuring, even for hazards
+- IMPORTANT: If known people's names are provided, use their actual names instead of generic descriptions like "a man" or "a woman". For example say "Ronit is standing in front of you" instead of "A man is standing in front of you".
+
+Be concise but human. You're their eyes - make them feel confident and safe.`;
  
  const READER_PROMPT = `You are a friendly assistant reading text aloud for a blind person. Speak naturally, like you're reading to a friend.
  
@@ -62,9 +63,9 @@
        );
      }
  
-    const { imageBase64, mode = "general" } = await req.json();
-     
-     if (!imageBase64) {
+    const { imageBase64, mode = "general", knownFaces = [] } = await req.json();
+      
+      if (!imageBase64) {
        return new Response(
          JSON.stringify({ error: "No image provided" }),
          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -72,9 +73,15 @@
      }
  
     const systemPrompt = mode === "reader" ? READER_PROMPT : GENERAL_PROMPT;
-    const userPrompt = mode === "reader" 
+    // Build user prompt - include known face names if available
+    let userPrompt = mode === "reader" 
        ? "Please read any text you can see in this image."
        : "What's in front of me? Help me understand my surroundings.";
+    
+    if (knownFaces.length > 0 && mode !== "reader") {
+      const faceInfo = knownFaces.map((f: any) => `${f.name} (${f.relation})`).join(", ");
+      userPrompt += `\n\nKnown people detected in this image: ${faceInfo}. Please use their actual names in your description.`;
+    }
 
     console.log("Calling Groq vision API with model:", VISION_MODEL, "mode:", mode);
  
