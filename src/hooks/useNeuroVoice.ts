@@ -12,6 +12,12 @@
   const onEndCallbackRef = useRef<(() => void) | null>(null);
  
    const speak = useCallback((text: string, priority: number = 5, options: SpeakOptions = {}) => {
+    // If there's nothing to say, don't stall smart-loop callers waiting for onend.
+    if (!text || !text.trim()) {
+      if (options.onEnd) options.onEnd();
+      return;
+    }
+
      if (!window.speechSynthesis) {
        console.warn("Speech synthesis not supported");
       // Still call onEnd if provided, so the loop can continue
