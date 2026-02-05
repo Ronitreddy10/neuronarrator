@@ -9,10 +9,19 @@
  
 export type VisionMode = "general" | "reader";
 
-export async function analyzeImage(base64Image: string, mode: VisionMode = "general"): Promise<VisionResponse> {
-   const { data, error } = await supabase.functions.invoke("analyze-image", {
-    body: { imageBase64: base64Image, mode },
-   });
+export interface KnownFaceInfo {
+  name: string;
+  relation: string;
+}
+
+export async function analyzeImage(
+  base64Image: string, 
+  mode: VisionMode = "general",
+  knownFaces: KnownFaceInfo[] = []
+): Promise<VisionResponse> {
+  const { data, error } = await supabase.functions.invoke("analyze-image", {
+    body: { imageBase64: base64Image, mode, knownFaces },
+  });
  
    if (error) {
      console.error("Edge function error:", error);

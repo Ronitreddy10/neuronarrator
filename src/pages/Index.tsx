@@ -14,8 +14,9 @@ import { useHaptics } from "@/hooks/useHaptics";
 import { useHapticBraille } from "@/hooks/useHapticBraille";
 import { useHazardSound } from "@/hooks/useHazardSound";
 import { useFaceRecognition } from "@/hooks/useFaceRecognition";
+import { useVoiceCommand } from "@/hooks/useVoiceCommand";
 import { HapticBrailleIndicator } from "@/components/HapticBrailleIndicator";
-import { analyzeImage as analyzeImageService, VisionMode } from "@/services/vision";
+import { analyzeImage as analyzeImageService, VisionMode, type KnownFaceInfo } from "@/services/vision";
 
 type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 
@@ -32,10 +33,7 @@ const Index = () => {
   const [captureRequestId, setCaptureRequestId] = useState(0);
   const isAnalyzingRef = useRef(false);
   const isActiveRef = useRef(false);
-  const isVisionSpeakingRef = useRef(false); // Prevents face recognition from interrupting vision speech
   const loopFallbackTimerRef = useRef<number | null>(null);
-  const faceRecognitionIntervalRef = useRef<number | null>(null);
-  const pendingFaceAnnouncementRef = useRef<string | null>(null); // Queue face speech for after vision
   const cameraRef = useRef<LiveCameraRef>(null);
 
   const { speak, stop, isSpeaking } = useNeuroVoice();
@@ -63,98 +61,36 @@ const Index = () => {
     loadModels();
   }, [loadModels]);
 
-  // Track last announced face to avoid repeating
-  const lastAnnouncedFaceRef = useRef<string | null>(null);
-  const lastAnnouncedTimeRef = useRef<number>(0);
-  const FACE_ANNOUNCE_COOLDOWN = 15000; // 15 seconds before re-announcing same face
-
-  // Face recognition loop (runs every 3s when scanning is active)
-  // NEVER interrupts vision speech - queues face announcements instead
-  useEffect(() => {
-    if (!isAutoCapturing || !isModelsLoaded) {
-      if (faceRecognitionIntervalRef.current) {
-        window.clearInterval(faceRecognitionIntervalRef.current);
-        faceRecognitionIntervalRef.current = null;
-      }
+  // Voice command handler - "Neuro remember [name]"
+  const handleVoiceRemember = useCallback((name: string) => {
+    if (!lastUnknownDescriptor) {
+      speak("I don't see an unknown face right now. Let me see someone first.", 5, {});
       return;
     }
-
-    const runFaceRecognition = async () => {
-      const video = cameraRef.current?.getVideoElement();
-      if (video && video.readyState >= 2) {
-        const match = await detectAndMatch(video);
-        
-        if (match) {
-          const now = Date.now();
-          const faceKey = match.known ? match.name : 'unknown';
-          const timeSinceLastAnnounce = now - lastAnnouncedTimeRef.current;
-          
-          // Only announce if it's a different face or cooldown has passed
-          const shouldAnnounce = 
-            faceKey !== lastAnnouncedFaceRef.current || 
-            timeSinceLastAnnounce > FACE_ANNOUNCE_COOLDOWN;
-          
-          if (shouldAnnounce) {
-            const speechText = generateSpeechText(match);
-            if (speechText) {
-              // If vision is currently speaking, queue it for later - DON'T interrupt
-              if (isVisionSpeakingRef.current || isSpeaking()) {
-                pendingFaceAnnouncementRef.current = speechText;
-                lastAnnouncedFaceRef.current = faceKey;
-                lastAnnouncedTimeRef.current = now;
-              } else {
-                lastAnnouncedFaceRef.current = faceKey;
-                lastAnnouncedTimeRef.current = now;
-                pendingFaceAnnouncementRef.current = null;
-                speak(speechText, 3, {});
-              }
-            }
-          }
-        }
+    // Auto-register with "Friend" as default relation, user can change later
+    registerCurrentFace(name, "Friend").then(success => {
+      if (success) {
+        speak(`Got it. I'll remember ${name} as your friend.`, 5, {});
+      } else {
+        speak(`Sorry, I couldn't save that face. Please try again.`, 5, {});
       }
-    };
+    });
+  }, [lastUnknownDescriptor, registerCurrentFace, speak]);
 
-    // Initial detection after a short delay
-    const initialTimeout = setTimeout(runFaceRecognition, 1000);
+  const handleVoiceClear = useCallback(() => {
+    clearAllFaces();
+    speak("All faces cleared from memory.", 5, {});
+  }, [clearAllFaces, speak]);
 
-    // Run every 3 seconds to avoid API spam
-    faceRecognitionIntervalRef.current = window.setInterval(runFaceRecognition, 3000);
+  // Always-on voice command listener (active when scanning)
+  const { isListening: isVoiceListening, lastCommand } = useVoiceCommand({
+    onRememberCommand: handleVoiceRemember,
+    onClearCommand: handleVoiceClear,
+    enabled: isAutoCapturing,
+  });
 
-    return () => {
-      clearTimeout(initialTimeout);
-      if (faceRecognitionIntervalRef.current) {
-        window.clearInterval(faceRecognitionIntervalRef.current);
-        faceRecognitionIntervalRef.current = null;
-      }
-    };
-  }, [isAutoCapturing, isModelsLoaded, detectAndMatch, speak, isSpeaking, generateSpeechText]);
-
-  // Called when vision speech finishes - triggers next capture + plays queued face announcement
-  const onVisionSpeechEnd = useCallback(() => {
-    isVisionSpeakingRef.current = false;
-    
-    // Play any queued face announcement before next capture
-    if (pendingFaceAnnouncementRef.current) {
-      const queuedText = pendingFaceAnnouncementRef.current;
-      pendingFaceAnnouncementRef.current = null;
-      speak(queuedText, 3, { onEnd: () => {
-        // After face announcement, trigger next capture
-        if (loopFallbackTimerRef.current) {
-          window.clearTimeout(loopFallbackTimerRef.current);
-          loopFallbackTimerRef.current = null;
-        }
-        if (isActiveRef.current) {
-          setTimeout(() => {
-            if (isActiveRef.current) {
-              setCaptureRequestId(prev => prev + 1);
-            }
-          }, 500);
-        }
-      }});
-      return;
-    }
-    
-    // No queued face announcement - trigger next capture directly
+  // Called when speech finishes — triggers next capture
+  const onSpeechEnd = useCallback(() => {
     if (loopFallbackTimerRef.current) {
       window.clearTimeout(loopFallbackTimerRef.current);
       loopFallbackTimerRef.current = null;
@@ -166,7 +102,7 @@ const Index = () => {
         }
       }, 500);
     }
-  }, [speak]);
+  }, []);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     // Prevent concurrent requests
@@ -176,19 +112,30 @@ const Index = () => {
     setAnalysisState("analyzing");
 
     try {
-      const result = await analyzeImageService(base64, mode);
+      // Step 1: Run face detection on the current frame BEFORE vision API
+      let knownFaces: KnownFaceInfo[] = [];
+      const video = cameraRef.current?.getVideoElement();
+      if (video && video.readyState >= 2 && isModelsLoaded) {
+        const match = await detectAndMatch(video);
+        if (match && match.known && match.context) {
+          knownFaces = [{
+            name: match.context.name,
+            relation: match.context.relation,
+          }];
+        }
+      }
+
+      // Step 2: Send image + face names to vision API
+      const result = await analyzeImageService(base64, mode, knownFaces);
 
       setPriority(result.priority);
       setCaptionText(result.description);
       setTextContent(result.text_content);
 
-      // Determine what to speak based on mode
+      // The AI description now includes face names naturally — no separate announcements needed
       const speechText = mode === "reader" 
         ? result.text_content || result.description
         : result.description;
-
-      // Mark vision as speaking so face recognition won't interrupt
-      isVisionSpeakingRef.current = true;
 
       // Handle high priority hazards
       if (result.priority > 7) {
@@ -196,41 +143,37 @@ const Index = () => {
         setShowWarning(true);
         sosPattern();
         playHazardSound(result.priority);
-        speak(`Warning! ${result.description}`, 10, { onEnd: onVisionSpeechEnd });
-        // Fallback timer - 30s max wait for very long descriptions
+        speak(`Warning! ${result.description}`, 10, { onEnd: onSpeechEnd });
+        // Safety fallback — 20s max
         loopFallbackTimerRef.current = window.setTimeout(() => {
-          isVisionSpeakingRef.current = false;
-          onVisionSpeechEnd();
-        }, 30000);
+          onSpeechEnd();
+        }, 20000);
         const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
         playHapticMessage(hazardWord);
       } else {
         setAnalysisState("success");
         setShowWarning(false);
         playHazardSound(result.priority);
-        speak(speechText, 5, { onEnd: onVisionSpeechEnd });
-        // Fallback timer - 30s max wait for very long descriptions
+        speak(speechText, 5, { onEnd: onSpeechEnd });
+        // Safety fallback — 20s max
         loopFallbackTimerRef.current = window.setTimeout(() => {
-          isVisionSpeakingRef.current = false;
-          onVisionSpeechEnd();
-        }, 30000);
+          onSpeechEnd();
+        }, 20000);
       }
     } catch (error) {
       console.error("Analysis error:", error);
       setAnalysisState("error");
-      isVisionSpeakingRef.current = false;
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      speak("System Error. " + errorMsg, 10, { onEnd: onVisionSpeechEnd });
+      speak("System Error. " + errorMsg, 10, { onEnd: onSpeechEnd });
       loopFallbackTimerRef.current = window.setTimeout(() => {
-        isVisionSpeakingRef.current = false;
-        onVisionSpeechEnd();
+        onSpeechEnd();
       }, 15000);
       setCaptionText(errorMsg);
       setTextContent("");
     } finally {
       isAnalyzingRef.current = false;
     }
-  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onVisionSpeechEnd]);
+  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, isModelsLoaded, detectAndMatch]);
 
   const toggleAutoCapture = async () => {
     if (isAutoCapturing) {
@@ -249,7 +192,6 @@ const Index = () => {
       stopHaptic();
     } else {
       // CRITICAL: Unlock audio on iOS/Safari before starting
-      // This must happen in response to a user gesture (the tap)
       await unlockAudioForMobile();
       
       setIsAutoCapturing(true);
@@ -309,6 +251,8 @@ const Index = () => {
         onClearFaces={handleClearFaces}
         onRetryModels={retryLoadModels}
         isVisible={isAutoCapturing || isLoadingModels || !!modelLoadError}
+        isVoiceListening={isVoiceListening}
+        lastVoiceCommand={lastCommand}
       />
 
       {/* Dynamic Island - elevated above camera */}
@@ -368,7 +312,7 @@ const Index = () => {
       {/* Settings Modal */}
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-      {/* Add Person Modal */}
+      {/* Add Person Modal (still available for manual use / relationship customization) */}
       <AddPersonModal
         isOpen={addPersonOpen}
         onClose={() => setAddPersonOpen(false)}
