@@ -1,3 +1,6 @@
+ import { AnimatePresence, motion } from "framer-motion";
+ import { useState, useEffect } from "react";
+ 
  interface CaptionDisplayProps {
    text: string;
   textContent?: string;
@@ -6,40 +9,87 @@
   mode?: "general" | "reader";
  }
  
-export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general" }: CaptionDisplayProps) => {
-  if (!isVisible || (!text && !textContent)) return null;
+ export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general" }: CaptionDisplayProps) => {
+   // Track displayed text separately to enable smooth transitions
+   const [displayedText, setDisplayedText] = useState(text);
+   const [displayedContent, setDisplayedContent] = useState(textContent);
+   const [isTransitioning, setIsTransitioning] = useState(false);
  
-  const hasTranscribedText = textContent && textContent.length > 0;
-  const hasDescription = text && text.length > 0;
-
+   useEffect(() => {
+     if (text !== displayedText) {
+       setIsTransitioning(true);
+       const timer = setTimeout(() => {
+         setDisplayedText(text);
+         setIsTransitioning(false);
+       }, 150);
+       return () => clearTimeout(timer);
+     }
+   }, [text, displayedText]);
+ 
+   useEffect(() => {
+     if (textContent !== displayedContent) {
+       setDisplayedContent(textContent);
+     }
+   }, [textContent, displayedContent]);
+ 
+   const hasTranscribedText = displayedContent && displayedContent.length > 0;
+   const hasDescription = displayedText && displayedText.length > 0;
+ 
    return (
-    <div className="fixed bottom-36 left-4 right-4 z-30 animate-in fade-in slide-in-from-bottom duration-300">
-      <div className="bg-black/80 backdrop-blur-xl rounded-2xl p-4 max-h-48 overflow-y-auto border border-white/10">
-        <div className="space-y-2">
-          {/* Always show scene description first */}
-          {hasDescription && (
-            <p
-              className={`text-lg font-medium leading-relaxed ${
-                priority > 7 ? "text-ios-red" : "text-white"
-              }`}
-            >
-              {text}
-            </p>
-          )}
-          
-          {/* Show transcribed text if available */}
-          {hasTranscribedText && (
-            <div className="mt-3 pt-3 border-t border-white/20">
-              <span className="text-xs text-ios-blue font-medium uppercase tracking-wider block mb-1">
-                Text Found
-              </span>
-              <p className="text-base text-white/90 leading-relaxed whitespace-pre-wrap">
-                {textContent}
-              </p>
-            </div>
-          )}
-        </div>
-       </div>
-     </div>
+     <AnimatePresence>
+       {isVisible && (hasDescription || hasTranscribedText) && (
+         <motion.div
+           initial={{ opacity: 0, y: 20 }}
+           animate={{ opacity: 1, y: 0 }}
+           exit={{ opacity: 0, y: 20 }}
+           transition={{ duration: 0.3, ease: "easeOut" }}
+           className="fixed bottom-36 left-4 right-4 z-30"
+         >
+           <div className="bg-gradient-to-br from-black/85 to-black/75 backdrop-blur-2xl rounded-3xl p-5 max-h-52 overflow-y-auto border border-white/15 shadow-2xl">
+             <div className="space-y-3">
+               {/* Scene description with smooth text transition */}
+               {hasDescription && (
+                 <motion.div
+                   key={displayedText}
+                   initial={{ opacity: 0.4 }}
+                   animate={{ opacity: isTransitioning ? 0.4 : 1 }}
+                   transition={{ duration: 0.25 }}
+                 >
+                   <p
+                     className={`text-lg font-medium leading-relaxed tracking-tight ${
+                       priority > 7 
+                         ? "text-ios-red drop-shadow-[0_0_8px_hsl(var(--ios-red)/0.5)]" 
+                         : "text-white/95"
+                     }`}
+                   >
+                     {displayedText}
+                   </p>
+                 </motion.div>
+               )}
+               
+               {/* Transcribed text section */}
+               {hasTranscribedText && (
+                 <motion.div 
+                   initial={{ opacity: 0 }}
+                   animate={{ opacity: 1 }}
+                   transition={{ duration: 0.3, delay: 0.1 }}
+                   className="mt-3 pt-3 border-t border-white/15"
+                 >
+                   <div className="flex items-center gap-2 mb-2">
+                     <div className="w-1.5 h-1.5 rounded-full bg-ios-blue animate-pulse" />
+                     <span className="text-xs text-ios-blue font-semibold uppercase tracking-widest">
+                       Text Found
+                     </span>
+                   </div>
+                   <p className="text-base text-white/85 leading-relaxed whitespace-pre-wrap font-light">
+                     {displayedContent}
+                   </p>
+                 </motion.div>
+               )}
+             </div>
+           </div>
+         </motion.div>
+       )}
+     </AnimatePresence>
    );
  };
