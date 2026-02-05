@@ -3,11 +3,55 @@
    hazards: string[];
    priority: number;
  }
+
+type GroqModelsResponse = {
+  data?: Array<{ id: string }>;
+};
+
+async function pickGroqVisionModel(apiKey: string): Promise<string> {
+  // Groq supports the OpenAI-compatible Models API.
+  const resp = await fetch("https://api.groq.com/openai/v1/models", {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  });
+
+  if (!resp.ok) {
+    // If we can't list models, fall back to a best-guess and let the request error surface.
+    return "llama-3.2-11b-vision";
+  }
+
+  const data = (await resp.json().catch(() => ({}))) as GroqModelsResponse;
+  const ids = (data.data || []).map((m) => m.id).filter(Boolean);
+
+  // Prefer stable (non-preview) vision models first.
+  const preferredOrder = [
+    // Common Groq vision naming patterns (best-effort).
+    "llama-3.2-11b-vision",
+    "llama-3.2-90b-vision",
+    "llama-3.2-11b-vision-preview",
+    "llama-3.2-90b-vision-preview",
+  ];
+
+  for (const preferred of preferredOrder) {
+    const match = ids.find((id) => id === preferred);
+    if (match) return match;
+  }
+
+  // Otherwise pick the first model that looks like it supports vision.
+  const visionLike = ids.find((id) => /vision/i.test(id));
+  if (visionLike) return visionLike;
+
+  // Last resort.
+  return "llama-3.2-11b-vision";
+}
  
  export async function analyzeImageWithOpenAI(
    base64Image: string,
    apiKey: string
  ): Promise<VisionResponse> {
+  const model = await pickGroqVisionModel(apiKey);
+
    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
      method: "POST",
      headers: {
@@ -15,7 +59,7 @@
        Authorization: `Bearer ${apiKey}`,
      },
      body: JSON.stringify({
-       model: "llama-3.2-11b-vision-preview",
+      model,
        messages: [
          {
            role: "system",
