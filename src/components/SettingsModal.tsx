@@ -1,55 +1,11 @@
- import { useState, useEffect } from "react";
- import { X, Key, Eye, EyeOff, Check } from "lucide-react";
- import { cn } from "@/lib/utils";
+ import { X } from "lucide-react";
  
  interface SettingsModalProps {
    isOpen: boolean;
    onClose: () => void;
  }
  
-const API_KEY_STORAGE_KEY = "neuronarrator_gemini_api_key";
- const GROQ_API_KEY_STORAGE_KEY = "neuronarrator_groq_api_key";
-const GROQ_MODEL_STORAGE_KEY = "neuronarrator_groq_model";
- 
- export const getStoredApiKey = (): string => {
-   return localStorage.getItem(GROQ_API_KEY_STORAGE_KEY) || "";
- };
-
-export const getStoredVisionModel = (): string => {
-  return localStorage.getItem(GROQ_MODEL_STORAGE_KEY) || "";
-};
- 
  export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
-   const [apiKey, setApiKey] = useState("");
-  const [modelId, setModelId] = useState("");
-   const [showKey, setShowKey] = useState(false);
-   const [saved, setSaved] = useState(false);
- 
-   useEffect(() => {
-     if (isOpen) {
-       setApiKey(getStoredApiKey());
-      setModelId(getStoredVisionModel());
-       setSaved(false);
-     }
-   }, [isOpen]);
- 
-   const handleSave = () => {
-     localStorage.setItem(GROQ_API_KEY_STORAGE_KEY, apiKey.trim());
-    localStorage.setItem(GROQ_MODEL_STORAGE_KEY, modelId.trim());
-     setSaved(true);
-     setTimeout(() => {
-       onClose();
-     }, 800);
-   };
- 
-   const handleClear = () => {
-     localStorage.removeItem(GROQ_API_KEY_STORAGE_KEY);
-    localStorage.removeItem(GROQ_MODEL_STORAGE_KEY);
-     setApiKey("");
-    setModelId("");
-     setSaved(false);
-   };
- 
    if (!isOpen) return null;
  
    return (
@@ -73,95 +29,24 @@ export const getStoredVisionModel = (): string => {
            </button>
          </div>
  
-         {/* API Key Section */}
+         {/* Info Section */}
          <div className="space-y-4">
-           <div className="flex items-center gap-2 text-muted-foreground">
-             <Key className="w-4 h-4" />
-             <span className="text-sm font-medium">Groq API Key</span>
+           <div className="text-center py-6">
+             <div className="w-12 h-12 rounded-full bg-ios-green/20 flex items-center justify-center mx-auto mb-4">
+               <span className="text-2xl">✓</span>
+             </div>
+             <h3 className="text-foreground font-medium mb-2">Ready to Use</h3>
+             <p className="text-sm text-muted-foreground">
+               NeuroNarrator is configured and ready. Vision analysis is powered by Lovable Cloud.
+             </p>
            </div>
  
-           <div className="relative">
-             <input
-               type={showKey ? "text" : "password"}
-               value={apiKey}
-               onChange={(e) => {
-                 setApiKey(e.target.value);
-                 setSaved(false);
-               }}
-               placeholder="gsk_..."
-               className="w-full h-12 px-4 pr-12 rounded-xl bg-surface-elevated border border-glass-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ios-blue transition-colors text-sm"
-             />
+           <div className="pt-2">
              <button
-               onClick={() => setShowKey(!showKey)}
-               className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+               onClick={onClose}
+               className="w-full h-11 rounded-xl bg-ios-blue text-foreground font-medium text-sm hover:opacity-90 transition-opacity"
              >
-               {showKey ? (
-                 <EyeOff className="w-5 h-5" />
-               ) : (
-                 <Eye className="w-5 h-5" />
-               )}
-             </button>
-           </div>
-
-            <div className="space-y-2 pt-2">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <span className="text-sm font-medium">Vision model</span>
-              </div>
-              <input
-                type="text"
-                value={modelId}
-                onChange={(e) => {
-                  setModelId(e.target.value);
-                  setSaved(false);
-                }}
-                placeholder="Paste Groq vision model id"
-                className="w-full h-11 px-4 rounded-xl bg-surface-elevated border border-glass-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ios-blue transition-colors text-sm"
-              />
-              <p className="text-xs text-muted-foreground">
-                If you see “model does not exist”, copy the recommended vision model ID from the Groq deprecations page and paste it here.
-              </p>
-            </div>
- 
-           <p className="text-xs text-muted-foreground">
-             Get your API key from{" "}
-             <a
-               href="https://console.groq.com/keys"
-               target="_blank"
-               rel="noopener noreferrer"
-               className="text-ios-blue hover:underline"
-             >
-               Groq Console
-             </a>
-           </p>
- 
-           {/* Actions */}
-           <div className="flex gap-3 pt-2">
-             <button
-               onClick={handleClear}
-               className="flex-1 h-11 rounded-xl border border-glass-border text-muted-foreground font-medium text-sm hover:bg-surface-elevated transition-colors"
-             >
-               Clear
-             </button>
-             <button
-               onClick={handleSave}
-                disabled={!apiKey.trim()}
-               className={cn(
-                 "flex-1 h-11 rounded-xl font-medium text-sm transition-all flex items-center justify-center gap-2",
-                 saved
-                   ? "bg-ios-green text-foreground"
-                   : apiKey.trim()
-                   ? "bg-ios-blue text-foreground hover:opacity-90"
-                   : "bg-surface-elevated text-muted-foreground cursor-not-allowed"
-               )}
-             >
-               {saved ? (
-                 <>
-                   <Check className="w-4 h-4" />
-                   Saved
-                 </>
-               ) : (
-                 "Save Key"
-               )}
+               Done
              </button>
            </div>
          </div>
