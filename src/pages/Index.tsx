@@ -35,8 +35,10 @@ const Index = () => {
   const isAnalyzingRef = useRef(false);
   const isActiveRef = useRef(false);
   const loopFallbackTimerRef = useRef<number | null>(null);
+  const watchdogTimerRef = useRef<number | null>(null);
   const cameraRef = useRef<LiveCameraRef>(null);
   const lastDescriptionRef = useRef<string>("");
+  const captureCountRef = useRef(0);
 
   const { speak, stop, isSpeaking } = useNeuroVoice();
   const { sosPattern } = useHaptics();
@@ -109,8 +111,8 @@ const Index = () => {
     enabled: isAutoCapturing,
   });
 
-  // Called when speech finishes — triggers next capture
-  const onSpeechEnd = useCallback(() => {
+  // Kick the next capture — used by speech end AND watchdog
+  const triggerNextCapture = useCallback(() => {
     if (loopFallbackTimerRef.current) {
       window.clearTimeout(loopFallbackTimerRef.current);
       loopFallbackTimerRef.current = null;
@@ -120,33 +122,69 @@ const Index = () => {
         if (isActiveRef.current) {
           setCaptureRequestId(prev => prev + 1);
         }
-      }, 500);
+      }, 300);
     }
   }, []);
+
+  // Called when speech finishes — triggers next capture
+  const onSpeechEnd = useCallback(() => {
+    triggerNextCapture();
+  }, [triggerNextCapture]);
+
+  // Watchdog: if nothing has happened for 10s, force a new capture
+  // This catches ALL failure modes: TTS silent fail, network timeout, etc.
+  useEffect(() => {
+    if (!isAutoCapturing) {
+      if (watchdogTimerRef.current) {
+        window.clearInterval(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
+      }
+      return;
+    }
+
+    watchdogTimerRef.current = window.setInterval(() => {
+      if (isActiveRef.current && !isAnalyzingRef.current) {
+        console.log("Watchdog: forcing next capture (loop may have stalled)");
+        setCaptureRequestId(prev => prev + 1);
+      }
+    }, 10000);
+
+    return () => {
+      if (watchdogTimerRef.current) {
+        window.clearInterval(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
+      }
+    };
+  }, [isAutoCapturing]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     // Prevent concurrent requests
     if (isAnalyzingRef.current) return;
     isAnalyzingRef.current = true;
+    captureCountRef.current += 1;
+    const thisCaptureNum = captureCountRef.current;
 
     setAnalysisState("analyzing");
 
     try {
-      // Step 1: Try face detection with a strict 3s timeout — skip on slow devices
+      // Step 1: Face detection — SKIP for the first 2 captures to get fast initial descriptions
+      // Also skip if models aren't loaded yet (they load lazily)
       let knownFaces: KnownFaceInfo[] = [];
-      const video = cameraRef.current?.getVideoElement();
-      if (video && video.readyState >= 2 && isModelsLoaded) {
-        try {
-          const faceTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
-          const match = await Promise.race([detectAndMatch(video), faceTimeout]);
-          if (match && match.known && match.context) {
-            knownFaces = [{
-              name: match.context.name,
-              relation: match.context.relation,
-            }];
+      if (thisCaptureNum > 2 && isModelsLoaded) {
+        const video = cameraRef.current?.getVideoElement();
+        if (video && video.readyState >= 2) {
+          try {
+            const faceTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000));
+            const match = await Promise.race([detectAndMatch(video), faceTimeout]);
+            if (match && match.known && match.context) {
+              knownFaces = [{
+                name: match.context.name,
+                relation: match.context.relation,
+              }];
+            }
+          } catch (faceErr) {
+            console.warn("Face detection skipped:", faceErr);
           }
-        } catch (faceErr) {
-          console.warn("Face detection skipped (too slow or error):", faceErr);
         }
       }
 
@@ -170,10 +208,10 @@ const Index = () => {
         sosPattern();
         playHazardSound(result.priority);
         speak(`Warning! ${result.description}`, 10, { onEnd: onSpeechEnd });
-        // Safety fallback — 20s max
+        // Safety fallback — 8s max (was 20s, way too slow on mobile)
         loopFallbackTimerRef.current = window.setTimeout(() => {
-          onSpeechEnd();
-        }, 20000);
+          triggerNextCapture();
+        }, 8000);
         const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
         playHapticMessage(hazardWord);
       } else {
@@ -181,30 +219,32 @@ const Index = () => {
         setShowWarning(false);
         playHazardSound(result.priority);
         speak(speechText, 5, { onEnd: onSpeechEnd });
-        // Safety fallback — 20s max
+        // Safety fallback — 8s max
         loopFallbackTimerRef.current = window.setTimeout(() => {
-          onSpeechEnd();
-        }, 20000);
+          triggerNextCapture();
+        }, 8000);
       }
     } catch (error) {
       console.error("Analysis error:", error);
       setAnalysisState("error");
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      speak("System Error. " + errorMsg, 10, { onEnd: onSpeechEnd });
-      loopFallbackTimerRef.current = window.setTimeout(() => {
-        onSpeechEnd();
-      }, 15000);
       setCaptionText(errorMsg);
       setTextContent("");
+      // Don't wait for error speech — just trigger next capture quickly
+      speak("Hmm, something went wrong. Retrying.", 5, {});
+      loopFallbackTimerRef.current = window.setTimeout(() => {
+        triggerNextCapture();
+      }, 3000);
     } finally {
       isAnalyzingRef.current = false;
     }
-  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, isModelsLoaded, detectAndMatch]);
+  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch]);
 
-  const toggleAutoCapture = async () => {
+  const toggleAutoCapture = () => {
     if (isAutoCapturing) {
       setIsAutoCapturing(false);
       isActiveRef.current = false;
+      captureCountRef.current = 0;
       if (loopFallbackTimerRef.current) {
         window.clearTimeout(loopFallbackTimerRef.current);
         loopFallbackTimerRef.current = null;
@@ -225,10 +265,12 @@ const Index = () => {
       // Unlock audio for TTS (non-blocking)
       unlockAudioForMobile();
       
-      // Trigger first capture after camera initializes
+      // Trigger first capture after camera initializes (1.5s)
       setTimeout(() => {
-        setCaptureRequestId(1);
-      }, 2000);
+        if (isActiveRef.current) {
+          setCaptureRequestId(1);
+        }
+      }, 1500);
     }
   };
 
