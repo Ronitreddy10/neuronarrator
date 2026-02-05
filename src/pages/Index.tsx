@@ -90,6 +90,15 @@ const Index = () => {
        );
  
        if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData?.error?.message || "API request failed";
+        
+        if (response.status === 429) {
+          throw new Error("Rate limit exceeded. Please wait a moment and try again, or check your API quota.");
+        }
+        if (response.status === 400) {
+          throw new Error("Invalid API key. Please check your key in settings.");
+        }
          throw new Error("API request failed");
        }
  
@@ -130,8 +139,9 @@ const Index = () => {
      } catch (error) {
        console.error("Analysis error:", error);
        setAnalysisState("error");
-       speak("System Error. Please check connection.", 10);
-       setCaptionText("Error analyzing image. Please check your API key and try again.");
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      speak("System Error. " + errorMsg, 10);
+      setCaptionText(errorMsg);
      }
    }, [uploadedImage, speak, sosPattern]);
  
