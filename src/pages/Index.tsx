@@ -2,7 +2,7 @@
 import { DynamicIsland } from "@/components/DynamicIsland";
  import { ImageUploadZone } from "@/components/ImageUploadZone";
 import { ControlDeck } from "@/components/ControlDeck";
- import { SettingsModal, getStoredApiKey } from "@/components/SettingsModal";
+ import { SettingsModal, getStoredApiKey, getStoredVisionModel } from "@/components/SettingsModal";
  import { WarningBanner } from "@/components/WarningBanner";
  import { CaptionDisplay } from "@/components/CaptionDisplay";
  import { useNeuroVoice } from "@/hooks/useNeuroVoice";
@@ -57,7 +57,9 @@ const Index = () => {
      setShowWarning(false);
  
      try {
-       const result = await analyzeImageWithOpenAI(uploadedImage, apiKey);
+      const result = await analyzeImageWithOpenAI(uploadedImage, apiKey, {
+        model: getStoredVisionModel(),
+      });
  
        setPriority(result.priority);
        setCaptionText(result.description);

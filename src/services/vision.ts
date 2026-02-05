@@ -17,8 +17,9 @@ async function pickGroqVisionModel(apiKey: string): Promise<string> {
   });
 
   if (!resp.ok) {
-    // If we can't list models, fall back to a best-guess and let the request error surface.
-    return "llama-3.2-11b-vision";
+    // If we can't list models (common in browsers due to CORS), we can't safely auto-pick.
+    // Return empty so the caller can use a user-provided model id.
+    return "";
   }
 
   const data = (await resp.json().catch(() => ({}))) as GroqModelsResponse;
@@ -42,15 +43,21 @@ async function pickGroqVisionModel(apiKey: string): Promise<string> {
   const visionLike = ids.find((id) => /vision/i.test(id));
   if (visionLike) return visionLike;
 
-  // Last resort.
-  return "llama-3.2-11b-vision";
+  // No vision models found.
+  return "";
 }
  
  export async function analyzeImageWithOpenAI(
    base64Image: string,
-   apiKey: string
+  apiKey: string,
+  opts?: { model?: string }
  ): Promise<VisionResponse> {
-  const model = await pickGroqVisionModel(apiKey);
+  const model = opts?.model?.trim() || (await pickGroqVisionModel(apiKey));
+  if (!model) {
+    throw new Error(
+      "No Groq vision model configured. Paste a supported Groq vision model ID in Settings."
+    );
+  }
 
    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
      method: "POST",
