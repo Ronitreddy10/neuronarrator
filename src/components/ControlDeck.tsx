@@ -19,7 +19,7 @@
    isAnalyzing,
  }: ControlDeckProps) => {
    return (
-     <div className="fixed bottom-0 left-0 right-0 p-6 pb-8">
+     <div className="fixed bottom-0 left-0 right-0 p-6 pb-8 z-20">
        <div className="glass-panel super-ellipse-sm p-4">
          <div className="flex items-center justify-between">
            {/* Settings Button */}
