@@ -1,29 +1,55 @@
  import { cn } from "@/lib/utils";
  
  interface DynamicIslandProps {
-   status: "standby" | "analyzing" | "hazard";
+   status: "idle" | "analyzing" | "success" | "warning" | "error";
+   priority?: number;
  }
  
- export const DynamicIsland = ({ status }: DynamicIslandProps) => {
-   const isAnalyzing = status === "analyzing";
-   const isHazard = status === "hazard";
+ export const DynamicIsland = ({ status, priority = 0 }: DynamicIslandProps) => {
+   const isHighPriority = priority > 7;
  
    const getStatusDotClass = () => {
-     if (isHazard) return "bg-ios-red status-analyzing";
-     if (isAnalyzing) return "bg-ios-blue status-analyzing";
-     return "bg-ios-green";
+     switch (status) {
+       case "warning":
+         return "bg-ios-red status-analyzing";
+       case "error":
+         return "bg-ios-red";
+       case "analyzing":
+         return "bg-ios-blue status-analyzing";
+       case "success":
+         return isHighPriority ? "bg-ios-red status-analyzing" : "bg-ios-blue";
+       default:
+         return "bg-ios-green";
+     }
    };
  
    const getStatusTextClass = () => {
-     if (isHazard) return "text-ios-red";
-     if (isAnalyzing) return "text-ios-blue";
-     return "text-muted-foreground";
+     switch (status) {
+       case "warning":
+       case "error":
+         return "text-ios-red";
+       case "analyzing":
+         return "text-ios-blue";
+       case "success":
+         return isHighPriority ? "text-ios-red" : "text-ios-blue";
+       default:
+         return "text-muted-foreground";
+     }
    };
  
    const getStatusText = () => {
-     if (isHazard) return "⚠ Hazard Detected";
-     if (isAnalyzing) return "Analyzing Scene...";
-     return "System Standby";
+     switch (status) {
+       case "warning":
+         return "⚠ Hazard Detected";
+       case "error":
+         return "⚠ System Error";
+       case "analyzing":
+         return "Analyzing Scene...";
+       case "success":
+         return isHighPriority ? "⚠ High Priority Alert" : "Analysis Complete";
+       default:
+         return "Ready to Analyze";
+     }
    };
  
    return (
