@@ -13,6 +13,7 @@
    const audioRef = useRef<HTMLAudioElement | null>(null);
   const onEndCallbackRef = useRef<(() => void) | null>(null);
    const isLoadingRef = useRef(false);
+   const abortControllerRef = useRef<AbortController | null>(null);
  
    const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
     // If there's nothing to say, don't stall smart-loop callers waiting for onend.
@@ -21,17 +22,20 @@
       return;
     }
 
-     // High priority (10) cancels current speech immediately
-     if (priority >= 10) {
-       if (audioRef.current) {
-         audioRef.current.pause();
-         audioRef.current.currentTime = 0;
-         audioRef.current = null;
-       }
+     // Cancel any ongoing speech/request
+     if (abortControllerRef.current) {
+       abortControllerRef.current.abort();
      }
+     if (audioRef.current) {
+       audioRef.current.pause();
+       audioRef.current.currentTime = 0;
+       audioRef.current = null;
+     }
+     window.speechSynthesis?.cancel();
  
      onEndCallbackRef.current = options.onEnd || null;
      isLoadingRef.current = true;
+     abortControllerRef.current = new AbortController();
  
      try {
        const { data, error } = await supabase.functions.invoke('text-to-speech', {
@@ -40,6 +44,11 @@
            speaker: options.speaker ?? "anushka",
          },
        });
+ 
+       // Check if aborted
+       if (abortControllerRef.current?.signal.aborted) {
+         return;
+       }
  
        if (error) {
          console.error("TTS edge function error:", error);
@@ -61,6 +70,7 @@
        audio.volume = 1.0;
  
        audio.onended = () => {
+         console.log("Audio ended, triggering next capture");
          URL.revokeObjectURL(audioUrl);
          if (onEndCallbackRef.current) {
            onEndCallbackRef.current();
@@ -73,6 +83,7 @@
          console.error("Audio playback error:", e);
          URL.revokeObjectURL(audioUrl);
          if (onEndCallbackRef.current) {
+           console.log("Audio error, triggering next capture");
            onEndCallbackRef.current();
            onEndCallbackRef.current = null;
          }
@@ -88,24 +99,31 @@
          throw playError;
        }
      } catch (err) {
+       // Check if aborted - don't fallback if intentionally cancelled
+       if (abortControllerRef.current?.signal.aborted) {
+         return;
+       }
+ 
        console.error("Sarvam TTS failed, falling back to browser TTS:", err);
        isLoadingRef.current = false;
  
        // Fallback to browser TTS
        if (window.speechSynthesis) {
          const utterance = new SpeechSynthesisUtterance(text);
-         utterance.rate = options.rate ?? 0.9;
+         utterance.rate = options.rate ?? 1.0;
          utterance.pitch = options.pitch ?? 1.0;
          utterance.volume = 1.0;
  
          utterance.onend = () => {
+           console.log("Browser TTS ended, triggering next capture");
            if (onEndCallbackRef.current) {
              onEndCallbackRef.current();
              onEndCallbackRef.current = null;
            }
          };
  
-         utterance.onerror = () => {
+         utterance.onerror = (e) => {
+           console.error("Browser TTS error:", e);
            if (onEndCallbackRef.current) {
              onEndCallbackRef.current();
              onEndCallbackRef.current = null;
@@ -115,6 +133,7 @@
          window.speechSynthesis.speak(utterance);
        } else {
          // No fallback available, trigger callback anyway
+         console.log("No TTS available, triggering next capture immediately");
          if (onEndCallbackRef.current) {
            onEndCallbackRef.current();
            onEndCallbackRef.current = null;
@@ -124,6 +143,10 @@
    }, []);
  
    const stop = useCallback(() => {
+     if (abortControllerRef.current) {
+       abortControllerRef.current.abort();
+       abortControllerRef.current = null;
+     }
      if (audioRef.current) {
        audioRef.current.pause();
        audioRef.current.currentTime = 0;
