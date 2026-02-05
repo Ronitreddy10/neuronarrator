@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -17,8 +17,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { UserPlus, Loader2, Users } from "lucide-react";
+import { UserPlus, Loader2, Users, Mic, MicOff, AudioLines } from "lucide-react";
 import { RELATION_OPTIONS, type RelationType } from "@/lib/faceDatabase";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { cn } from "@/lib/utils";
 
 interface AddPersonModalProps {
   isOpen: boolean;
@@ -31,16 +33,48 @@ export const AddPersonModal = ({
   isOpen,
   onClose,
   onSave,
-  isProcessing = false
+  isProcessing = false,
 }: AddPersonModalProps) => {
   const [name, setName] = useState("");
   const [relation, setRelation] = useState<RelationType>("Acquaintance");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
 
+  const {
+    isRecording,
+    isTranscribing,
+    transcript,
+    error: voiceError,
+    startRecording,
+    stopRecording,
+    reset: resetVoice,
+  } = useVoiceInput();
+
+  // When transcript arrives, auto-fill the name field
+  useEffect(() => {
+    if (transcript) {
+      // Clean up transcript - capitalize first letter of each word
+      const cleanName = transcript
+        .replace(/[.!?,;:]/g, "")
+        .trim()
+        .split(" ")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(" ");
+      setName(cleanName);
+    }
+  }, [transcript]);
+
+  const handleVoiceToggle = async () => {
+    if (isRecording) {
+      await stopRecording();
+    } else {
+      await startRecording();
+    }
+  };
+
   const handleSave = async () => {
     const trimmedName = name.trim();
-    
+
     if (!trimmedName) {
       setError("Please enter a name");
       return;
@@ -59,6 +93,7 @@ export const AddPersonModal = ({
       if (success) {
         setName("");
         setRelation("Acquaintance");
+        resetVoice();
         onClose();
       } else {
         setError("Failed to save face. Please try again.");
@@ -74,6 +109,7 @@ export const AddPersonModal = ({
     setName("");
     setRelation("Acquaintance");
     setError("");
+    resetVoice();
     onClose();
   };
 
@@ -92,12 +128,53 @@ export const AddPersonModal = ({
             Who is this?
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Enter a name and relationship for the person in front of the camera.
-            They will be recognized and announced with context next time.
+            Say their name or type it below. Choose their relationship to you.
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-4">
+          {/* Voice Input Section */}
+          <div className="flex flex-col items-center gap-3 py-2">
+            <button
+              onClick={handleVoiceToggle}
+              disabled={isTranscribing || isSaving}
+              className={cn(
+                "w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300",
+                isRecording
+                  ? "bg-ios-red text-white animate-pulse scale-110 shadow-lg shadow-ios-red/40"
+                  : isTranscribing
+                  ? "bg-ios-orange/20 text-ios-orange"
+                  : "bg-ios-blue/15 text-ios-blue hover:bg-ios-blue/25 active:scale-95"
+              )}
+              aria-label={isRecording ? "Stop recording" : "Start voice input"}
+            >
+              {isTranscribing ? (
+                <Loader2 className="w-7 h-7 animate-spin" />
+              ) : isRecording ? (
+                <AudioLines className="w-7 h-7" />
+              ) : (
+                <Mic className="w-7 h-7" />
+              )}
+            </button>
+            <p className="text-xs text-muted-foreground text-center">
+              {isRecording
+                ? "Listening... tap to stop"
+                : isTranscribing
+                ? "Recognizing speech..."
+                : "Tap mic & say the name"}
+            </p>
+            {voiceError && (
+              <p className="text-xs text-ios-red text-center">{voiceError}</p>
+            )}
+          </div>
+
+          {/* Divider */}
+          <div className="flex items-center gap-3">
+            <div className="flex-1 h-px bg-glass-border" />
+            <span className="text-xs text-muted-foreground">or type</span>
+            <div className="flex-1 h-px bg-glass-border" />
+          </div>
+
           {/* Name Input */}
           <div className="grid gap-2">
             <Label htmlFor="name" className="text-foreground">
@@ -109,15 +186,17 @@ export const AddPersonModal = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={isSaving}
-              autoFocus
+              disabled={isSaving || isRecording}
               className="bg-background/50 border-glass-border text-foreground placeholder:text-muted-foreground"
             />
           </div>
 
           {/* Relationship Dropdown */}
           <div className="grid gap-2">
-            <Label htmlFor="relation" className="text-foreground flex items-center gap-2">
+            <Label
+              htmlFor="relation"
+              className="text-foreground flex items-center gap-2"
+            >
               <Users className="w-4 h-4 text-muted-foreground" />
               Relationship
             </Label>
@@ -126,7 +205,7 @@ export const AddPersonModal = ({
               onValueChange={(value) => setRelation(value as RelationType)}
               disabled={isSaving}
             >
-              <SelectTrigger 
+              <SelectTrigger
                 id="relation"
                 className="bg-background/50 border-glass-border text-foreground"
               >
@@ -134,8 +213,8 @@ export const AddPersonModal = ({
               </SelectTrigger>
               <SelectContent className="bg-surface border-glass-border z-[100]">
                 {RELATION_OPTIONS.map((option) => (
-                  <SelectItem 
-                    key={option} 
+                  <SelectItem
+                    key={option}
                     value={option}
                     className="text-foreground hover:bg-accent focus:bg-accent"
                   >
@@ -146,9 +225,7 @@ export const AddPersonModal = ({
             </Select>
           </div>
 
-          {error && (
-            <p className="text-sm text-ios-red">{error}</p>
-          )}
+          {error && <p className="text-sm text-ios-red">{error}</p>}
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
@@ -162,7 +239,7 @@ export const AddPersonModal = ({
           </Button>
           <Button
             onClick={handleSave}
-            disabled={isSaving || !name.trim()}
+            disabled={isSaving || !name.trim() || isRecording || isTranscribing}
             className="bg-ios-blue hover:bg-ios-blue/90 text-white"
           >
             {isSaving ? (

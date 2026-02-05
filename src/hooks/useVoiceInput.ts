@@ -1,0 +1,165 @@
+import { useState, useCallback, useRef } from "react";
+import { supabase } from "@/integrations/supabase/client";
+
+interface UseVoiceInputReturn {
+  isRecording: boolean;
+  isTranscribing: boolean;
+  transcript: string | null;
+  error: string | null;
+  startRecording: () => Promise<void>;
+  stopRecording: () => Promise<string | null>;
+  reset: () => void;
+}
+
+export function useVoiceInput(): UseVoiceInputReturn {
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const startRecording = useCallback(async () => {
+    setError(null);
+    setTranscript(null);
+    chunksRef.current = [];
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 16000,
+        },
+      });
+      streamRef.current = stream;
+
+      // Use webm/opus which is widely supported
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.start(100); // Collect data every 100ms
+      setIsRecording(true);
+      console.log("Voice recording started");
+    } catch (err) {
+      console.error("Microphone access error:", err);
+      setError("Could not access microphone. Please check permissions.");
+    }
+  }, []);
+
+  const stopRecording = useCallback(async (): Promise<string | null> => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") {
+      return null;
+    }
+
+    return new Promise((resolve) => {
+      const mediaRecorder = mediaRecorderRef.current!;
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks
+        streamRef.current?.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+
+        setIsRecording(false);
+        setIsTranscribing(true);
+
+        try {
+          const audioBlob = new Blob(chunksRef.current, { type: "audio/webm" });
+          console.log("Audio recorded, size:", audioBlob.size, "bytes");
+
+          if (audioBlob.size < 1000) {
+            setError("Recording too short. Please try again.");
+            setIsTranscribing(false);
+            resolve(null);
+            return;
+          }
+
+          // Convert blob to base64
+          const arrayBuffer = await audioBlob.arrayBuffer();
+          const uint8Array = new Uint8Array(arrayBuffer);
+          let binary = "";
+          for (let i = 0; i < uint8Array.length; i++) {
+            binary += String.fromCharCode(uint8Array[i]);
+          }
+          const audioBase64 = btoa(binary);
+
+          console.log("Sending audio to STT, base64 length:", audioBase64.length);
+
+          // Call the edge function
+          const { data, error: fnError } = await supabase.functions.invoke(
+            "speech-to-text",
+            {
+              body: { audioBase64, language_code: "en-IN" },
+            }
+          );
+
+          if (fnError) {
+            console.error("STT edge function error:", fnError);
+            setError("Voice recognition failed. Please try again or type manually.");
+            setIsTranscribing(false);
+            resolve(null);
+            return;
+          }
+
+          const text = data?.transcript?.trim() || null;
+          console.log("STT transcript:", text);
+
+          if (!text) {
+            setError("Could not understand. Please speak clearly and try again.");
+            setIsTranscribing(false);
+            resolve(null);
+            return;
+          }
+
+          setTranscript(text);
+          setIsTranscribing(false);
+          resolve(text);
+        } catch (err) {
+          console.error("Transcription error:", err);
+          setError("Voice recognition failed. Please try again.");
+          setIsTranscribing(false);
+          resolve(null);
+        }
+      };
+
+      mediaRecorder.stop();
+    });
+  }, []);
+
+  const reset = useCallback(() => {
+    // Stop any ongoing recording
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    mediaRecorderRef.current = null;
+    chunksRef.current = [];
+    setIsRecording(false);
+    setIsTranscribing(false);
+    setTranscript(null);
+    setError(null);
+  }, []);
+
+  return {
+    isRecording,
+    isTranscribing,
+    transcript,
+    error,
+    startRecording,
+    stopRecording,
+    reset,
+  };
+}
