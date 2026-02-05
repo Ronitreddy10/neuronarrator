@@ -61,7 +61,12 @@ const Index = () => {
     loadModels();
   }, [loadModels]);
 
-  // Face recognition loop (runs every 500ms when scanning is active)
+  // Track last announced face to avoid repeating
+  const lastAnnouncedFaceRef = useRef<string | null>(null);
+  const lastAnnouncedTimeRef = useRef<number>(0);
+  const FACE_ANNOUNCE_COOLDOWN = 10000; // 10 seconds before re-announcing same face
+
+  // Face recognition loop (runs every 2s when scanning is active)
   useEffect(() => {
     if (!isAutoCapturing || !isModelsLoaded) {
       if (faceRecognitionIntervalRef.current) {
@@ -76,12 +81,23 @@ const Index = () => {
       if (video && video.readyState >= 2) {
         const match = await detectAndMatch(video);
         
-        // Announce faces with contextual information
         if (match) {
-          const speechText = generateSpeechText(match);
-          // Only speak if we have something to say
-          if (speechText && (match.known || !match.known)) {
-            speak(speechText, 3, {});
+          const now = Date.now();
+          const faceKey = match.known ? match.name : 'unknown';
+          const timeSinceLastAnnounce = now - lastAnnouncedTimeRef.current;
+          
+          // Only speak if it's a different face or cooldown has passed
+          const shouldAnnounce = 
+            faceKey !== lastAnnouncedFaceRef.current || 
+            timeSinceLastAnnounce > FACE_ANNOUNCE_COOLDOWN;
+          
+          if (shouldAnnounce) {
+            const speechText = generateSpeechText(match);
+            if (speechText) {
+              lastAnnouncedFaceRef.current = faceKey;
+              lastAnnouncedTimeRef.current = now;
+              speak(speechText, 3, {});
+            }
           }
         }
       }
@@ -90,8 +106,8 @@ const Index = () => {
     // Initial detection
     runFaceRecognition();
 
-    // Run every 500ms
-    faceRecognitionIntervalRef.current = window.setInterval(runFaceRecognition, 500);
+    // Run every 2 seconds (not 500ms) to avoid API spam
+    faceRecognitionIntervalRef.current = window.setInterval(runFaceRecognition, 2000);
 
     return () => {
       if (faceRecognitionIntervalRef.current) {
@@ -99,7 +115,7 @@ const Index = () => {
         faceRecognitionIntervalRef.current = null;
       }
     };
-  }, [isAutoCapturing, isModelsLoaded, detectAndMatch, speak]);
+  }, [isAutoCapturing, isModelsLoaded, detectAndMatch, speak, generateSpeechText]);
 
   // Trigger next capture in the smart loop
   const triggerNextCapture = useCallback(() => {
