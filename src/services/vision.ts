@@ -8,14 +8,14 @@
    base64Image: string,
    apiKey: string
  ): Promise<VisionResponse> {
-   const response = await fetch("https://api.openai.com/v1/chat/completions", {
+   const response = await fetch("https://api.x.ai/v1/chat/completions", {
      method: "POST",
      headers: {
        "Content-Type": "application/json",
        Authorization: `Bearer ${apiKey}`,
      },
      body: JSON.stringify({
-       model: "gpt-4o",
+       model: "grok-2-vision-1212",
        messages: [
          {
            role: "system",
@@ -50,7 +50,7 @@
        throw new Error("Rate limit exceeded. Please wait and try again.");
      }
      if (response.status === 401) {
-       throw new Error("Invalid API key. Please check your OpenAI key in settings.");
+       throw new Error("Invalid API key. Please check your Grok key in settings.");
      }
      throw new Error(errorMessage);
    }

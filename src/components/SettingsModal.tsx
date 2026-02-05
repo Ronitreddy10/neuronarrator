@@ -8,10 +8,10 @@
  }
  
  const API_KEY_STORAGE_KEY = "neuronarrator_gemini_api_key";
- const OPENAI_API_KEY_STORAGE_KEY = "neuronarrator_openai_api_key";
+ const GROK_API_KEY_STORAGE_KEY = "neuronarrator_grok_api_key";
  
  export const getStoredApiKey = (): string => {
-   return localStorage.getItem(OPENAI_API_KEY_STORAGE_KEY) || "";
+   return localStorage.getItem(GROK_API_KEY_STORAGE_KEY) || "";
  };
  
  export const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
@@ -27,7 +27,7 @@
    }, [isOpen]);
  
    const handleSave = () => {
-     localStorage.setItem(OPENAI_API_KEY_STORAGE_KEY, apiKey.trim());
+     localStorage.setItem(GROK_API_KEY_STORAGE_KEY, apiKey.trim());
      setSaved(true);
      setTimeout(() => {
        onClose();
@@ -35,7 +35,7 @@
    };
  
    const handleClear = () => {
-     localStorage.removeItem(OPENAI_API_KEY_STORAGE_KEY);
+     localStorage.removeItem(GROK_API_KEY_STORAGE_KEY);
      setApiKey("");
      setSaved(false);
    };
@@ -67,7 +67,7 @@
          <div className="space-y-4">
            <div className="flex items-center gap-2 text-muted-foreground">
              <Key className="w-4 h-4" />
-             <span className="text-sm font-medium">OpenAI API Key</span>
+             <span className="text-sm font-medium">Grok API Key</span>
            </div>
  
            <div className="relative">
@@ -78,7 +78,7 @@
                  setApiKey(e.target.value);
                  setSaved(false);
                }}
-               placeholder="sk-..."
+               placeholder="xai-..."
                className="w-full h-12 px-4 pr-12 rounded-xl bg-surface-elevated border border-glass-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ios-blue transition-colors text-sm"
              />
              <button
@@ -96,12 +96,12 @@
            <p className="text-xs text-muted-foreground">
              Get your API key from{" "}
              <a
-               href="https://platform.openai.com/api-keys"
+               href="https://console.x.ai"
                target="_blank"
                rel="noopener noreferrer"
                className="text-ios-blue hover:underline"
              >
-               OpenAI Platform
+               xAI Console
              </a>
            </p>
  
