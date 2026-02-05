@@ -32,11 +32,13 @@ const Index = () => {
   const [captureRequestId, setCaptureRequestId] = useState(0);
   const isAnalyzingRef = useRef(false);
   const isActiveRef = useRef(false);
+  const isVisionSpeakingRef = useRef(false); // Prevents face recognition from interrupting vision speech
   const loopFallbackTimerRef = useRef<number | null>(null);
   const faceRecognitionIntervalRef = useRef<number | null>(null);
+  const pendingFaceAnnouncementRef = useRef<string | null>(null); // Queue face speech for after vision
   const cameraRef = useRef<LiveCameraRef>(null);
 
-  const { speak, stop } = useNeuroVoice();
+  const { speak, stop, isSpeaking } = useNeuroVoice();
   const { sosPattern } = useHaptics();
   const { playHapticMessage, stopHaptic, isPlaying: isHapticPlaying, currentChar, currentDots } = useHapticBraille();
   const { playHazardSound } = useHazardSound();
@@ -64,9 +66,10 @@ const Index = () => {
   // Track last announced face to avoid repeating
   const lastAnnouncedFaceRef = useRef<string | null>(null);
   const lastAnnouncedTimeRef = useRef<number>(0);
-  const FACE_ANNOUNCE_COOLDOWN = 10000; // 10 seconds before re-announcing same face
+  const FACE_ANNOUNCE_COOLDOWN = 15000; // 15 seconds before re-announcing same face
 
-  // Face recognition loop (runs every 2s when scanning is active)
+  // Face recognition loop (runs every 3s when scanning is active)
+  // NEVER interrupts vision speech - queues face announcements instead
   useEffect(() => {
     if (!isAutoCapturing || !isModelsLoaded) {
       if (faceRecognitionIntervalRef.current) {
@@ -86,7 +89,7 @@ const Index = () => {
           const faceKey = match.known ? match.name : 'unknown';
           const timeSinceLastAnnounce = now - lastAnnouncedTimeRef.current;
           
-          // Only speak if it's a different face or cooldown has passed
+          // Only announce if it's a different face or cooldown has passed
           const shouldAnnounce = 
             faceKey !== lastAnnouncedFaceRef.current || 
             timeSinceLastAnnounce > FACE_ANNOUNCE_COOLDOWN;
@@ -94,44 +97,76 @@ const Index = () => {
           if (shouldAnnounce) {
             const speechText = generateSpeechText(match);
             if (speechText) {
-              lastAnnouncedFaceRef.current = faceKey;
-              lastAnnouncedTimeRef.current = now;
-              speak(speechText, 3, {});
+              // If vision is currently speaking, queue it for later - DON'T interrupt
+              if (isVisionSpeakingRef.current || isSpeaking()) {
+                pendingFaceAnnouncementRef.current = speechText;
+                lastAnnouncedFaceRef.current = faceKey;
+                lastAnnouncedTimeRef.current = now;
+              } else {
+                lastAnnouncedFaceRef.current = faceKey;
+                lastAnnouncedTimeRef.current = now;
+                pendingFaceAnnouncementRef.current = null;
+                speak(speechText, 3, {});
+              }
             }
           }
         }
       }
     };
 
-    // Initial detection
-    runFaceRecognition();
+    // Initial detection after a short delay
+    const initialTimeout = setTimeout(runFaceRecognition, 1000);
 
-    // Run every 2 seconds (not 500ms) to avoid API spam
-    faceRecognitionIntervalRef.current = window.setInterval(runFaceRecognition, 2000);
+    // Run every 3 seconds to avoid API spam
+    faceRecognitionIntervalRef.current = window.setInterval(runFaceRecognition, 3000);
 
     return () => {
+      clearTimeout(initialTimeout);
       if (faceRecognitionIntervalRef.current) {
         window.clearInterval(faceRecognitionIntervalRef.current);
         faceRecognitionIntervalRef.current = null;
       }
     };
-  }, [isAutoCapturing, isModelsLoaded, detectAndMatch, speak, generateSpeechText]);
+  }, [isAutoCapturing, isModelsLoaded, detectAndMatch, speak, isSpeaking, generateSpeechText]);
 
-  // Trigger next capture in the smart loop
-  const triggerNextCapture = useCallback(() => {
+  // Called when vision speech finishes - triggers next capture + plays queued face announcement
+  const onVisionSpeechEnd = useCallback(() => {
+    isVisionSpeakingRef.current = false;
+    
+    // Play any queued face announcement before next capture
+    if (pendingFaceAnnouncementRef.current) {
+      const queuedText = pendingFaceAnnouncementRef.current;
+      pendingFaceAnnouncementRef.current = null;
+      speak(queuedText, 3, { onEnd: () => {
+        // After face announcement, trigger next capture
+        if (loopFallbackTimerRef.current) {
+          window.clearTimeout(loopFallbackTimerRef.current);
+          loopFallbackTimerRef.current = null;
+        }
+        if (isActiveRef.current) {
+          setTimeout(() => {
+            if (isActiveRef.current) {
+              setCaptureRequestId(prev => prev + 1);
+            }
+          }, 500);
+        }
+      }});
+      return;
+    }
+    
+    // No queued face announcement - trigger next capture directly
     if (loopFallbackTimerRef.current) {
       window.clearTimeout(loopFallbackTimerRef.current);
       loopFallbackTimerRef.current = null;
     }
     if (isActiveRef.current) {
-      // Small delay then request next capture
       setTimeout(() => {
         if (isActiveRef.current) {
           setCaptureRequestId(prev => prev + 1);
         }
-      }, 200);
+      }, 500);
     }
-  }, []);
+  }, [speak]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     // Prevent concurrent requests
@@ -152,37 +187,50 @@ const Index = () => {
         ? result.text_content || result.description
         : result.description;
 
+      // Mark vision as speaking so face recognition won't interrupt
+      isVisionSpeakingRef.current = true;
+
       // Handle high priority hazards
       if (result.priority > 7) {
         setAnalysisState("warning");
         setShowWarning(true);
         sosPattern();
         playHazardSound(result.priority);
-        speak(`Warning! ${result.description}`, 10, { onEnd: triggerNextCapture });
-        // Fallback in case Web Speech API never fires onend on some devices
-        loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 8000);
-        // Extract hazard keyword and play Braille haptic
+        speak(`Warning! ${result.description}`, 10, { onEnd: onVisionSpeechEnd });
+        // Fallback timer - 30s max wait for very long descriptions
+        loopFallbackTimerRef.current = window.setTimeout(() => {
+          isVisionSpeakingRef.current = false;
+          onVisionSpeechEnd();
+        }, 30000);
         const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
         playHapticMessage(hazardWord);
       } else {
         setAnalysisState("success");
         setShowWarning(false);
         playHazardSound(result.priority);
-        speak(speechText, 5, { onEnd: triggerNextCapture });
-        loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 8000);
+        speak(speechText, 5, { onEnd: onVisionSpeechEnd });
+        // Fallback timer - 30s max wait for very long descriptions
+        loopFallbackTimerRef.current = window.setTimeout(() => {
+          isVisionSpeakingRef.current = false;
+          onVisionSpeechEnd();
+        }, 30000);
       }
     } catch (error) {
       console.error("Analysis error:", error);
       setAnalysisState("error");
+      isVisionSpeakingRef.current = false;
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      speak("System Error. " + errorMsg, 10, { onEnd: triggerNextCapture });
-      loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 8000);
+      speak("System Error. " + errorMsg, 10, { onEnd: onVisionSpeechEnd });
+      loopFallbackTimerRef.current = window.setTimeout(() => {
+        isVisionSpeakingRef.current = false;
+        onVisionSpeechEnd();
+      }, 15000);
       setCaptionText(errorMsg);
       setTextContent("");
     } finally {
       isAnalyzingRef.current = false;
     }
-  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, triggerNextCapture]);
+  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onVisionSpeechEnd]);
 
   const toggleAutoCapture = async () => {
     if (isAutoCapturing) {
