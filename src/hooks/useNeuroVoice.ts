@@ -49,9 +49,23 @@ export const unlockAudioForMobile = (): Promise<void> => {
 export const useNeuroVoice = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const onEndCallbackRef = useRef<(() => void) | null>(null);
-   const isLoadingRef = useRef(false);
-   const abortControllerRef = useRef<AbortController | null>(null);
+  const isLoadingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const safetyTimerRef = useRef<number | null>(null);
  
+   const fireOnEnd = useCallback(() => {
+    if (safetyTimerRef.current) {
+      window.clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+    if (onEndCallbackRef.current) {
+      const cb = onEndCallbackRef.current;
+      onEndCallbackRef.current = null;
+      cb();
+    }
+    isLoadingRef.current = false;
+  }, []);
+
    const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
     // If there's nothing to say, don't stall smart-loop callers waiting for onend.
     if (!text || !text.trim()) {
@@ -60,6 +74,10 @@ export const useNeuroVoice = () => {
     }
 
      // Cancel any ongoing speech/request
+     if (safetyTimerRef.current) {
+       window.clearTimeout(safetyTimerRef.current);
+       safetyTimerRef.current = null;
+     }
      if (abortControllerRef.current) {
        abortControllerRef.current.abort();
      }
@@ -113,92 +131,91 @@ export const useNeuroVoice = () => {
        audio.volume = 1.0;
  
        audio.onended = () => {
-         console.log("Audio ended, triggering next capture");
-         URL.revokeObjectURL(audioUrl);
-         if (onEndCallbackRef.current) {
-           onEndCallbackRef.current();
-           onEndCallbackRef.current = null;
-         }
-         isLoadingRef.current = false;
-       };
+          console.log("Audio ended, triggering next capture");
+          URL.revokeObjectURL(audioUrl);
+          fireOnEnd();
+        };
  
-       audio.onerror = (e) => {
-         console.error("Audio playback error:", e);
-         URL.revokeObjectURL(audioUrl);
-         if (onEndCallbackRef.current) {
-           console.log("Audio error, triggering next capture");
-           onEndCallbackRef.current();
-           onEndCallbackRef.current = null;
-         }
-         isLoadingRef.current = false;
-       };
+        audio.onerror = (e) => {
+          console.error("Audio playback error:", e);
+          URL.revokeObjectURL(audioUrl);
+          fireOnEnd();
+        };
  
-       // Play with user interaction handling
-       try {
-         await audio.play();
-         console.log("Sarvam audio playing");
-       } catch (playError) {
-         console.error("Audio play failed:", playError);
-         throw playError;
-       }
-     } catch (err) {
-       // Check if aborted - don't fallback if intentionally cancelled
-       if (abortControllerRef.current?.signal.aborted) {
-         return;
-       }
+        // Play with user interaction handling
+        try {
+          await audio.play();
+          console.log("Sarvam audio playing");
+          // SAFETY: guarantee onEnd fires even if audio events silently fail (iOS quirk)
+          // Estimate audio duration — fallback to 7s if we can't determine it
+          const estimatedDuration = (audio.duration && isFinite(audio.duration)) 
+            ? (audio.duration * 1000) + 1000 
+            : 7000;
+          safetyTimerRef.current = window.setTimeout(() => {
+            console.warn("Safety timer: forcing onEnd (audio event may have not fired)");
+            fireOnEnd();
+          }, estimatedDuration);
+        } catch (playError) {
+          console.error("Audio play failed:", playError);
+          throw playError;
+        }
+      } catch (err) {
+        // Check if aborted - don't fallback if intentionally cancelled
+        if (abortControllerRef.current?.signal.aborted) {
+          return;
+        }
  
-       console.error("Sarvam TTS failed, falling back to browser TTS:", err);
-       isLoadingRef.current = false;
+        console.error("Sarvam TTS failed, falling back to browser TTS:", err);
  
-       // Fallback to browser TTS
-       if (window.speechSynthesis) {
-         const utterance = new SpeechSynthesisUtterance(text);
-         utterance.rate = options.rate ?? 1.0;
-         utterance.pitch = options.pitch ?? 1.0;
-         utterance.volume = 1.0;
+        // Fallback to browser TTS
+        if (window.speechSynthesis) {
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.rate = options.rate ?? 1.0;
+          utterance.pitch = options.pitch ?? 1.0;
+          utterance.volume = 1.0;
  
-         utterance.onend = () => {
-           console.log("Browser TTS ended, triggering next capture");
-           if (onEndCallbackRef.current) {
-             onEndCallbackRef.current();
-             onEndCallbackRef.current = null;
-           }
-         };
+          utterance.onend = () => {
+            console.log("Browser TTS ended, triggering next capture");
+            fireOnEnd();
+          };
  
-         utterance.onerror = (e) => {
-           console.error("Browser TTS error:", e);
-           if (onEndCallbackRef.current) {
-             onEndCallbackRef.current();
-             onEndCallbackRef.current = null;
-           }
-         };
+          utterance.onerror = (e) => {
+            console.error("Browser TTS error:", e);
+            fireOnEnd();
+          };
  
-         window.speechSynthesis.speak(utterance);
-       } else {
-         // No fallback available, trigger callback anyway
-         console.log("No TTS available, triggering next capture immediately");
-         if (onEndCallbackRef.current) {
-           onEndCallbackRef.current();
-           onEndCallbackRef.current = null;
-         }
-       }
-     }
-   }, []);
+          window.speechSynthesis.speak(utterance);
+          // Safety timer for browser TTS too
+          safetyTimerRef.current = window.setTimeout(() => {
+            console.warn("Safety timer: forcing onEnd for browser TTS");
+            fireOnEnd();
+          }, 7000);
+        } else {
+          // No fallback available, trigger callback anyway
+          console.log("No TTS available, triggering next capture immediately");
+          fireOnEnd();
+        }
+      }
+    }, [fireOnEnd]);
  
-   const stop = useCallback(() => {
-     if (abortControllerRef.current) {
-       abortControllerRef.current.abort();
-       abortControllerRef.current = null;
-     }
-     if (audioRef.current) {
-       audioRef.current.pause();
-       audioRef.current.currentTime = 0;
-       audioRef.current = null;
-     }
-     window.speechSynthesis?.cancel();
-    onEndCallbackRef.current = null;
-     isLoadingRef.current = false;
-   }, []);
+    const stop = useCallback(() => {
+      if (safetyTimerRef.current) {
+        window.clearTimeout(safetyTimerRef.current);
+        safetyTimerRef.current = null;
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        audioRef.current = null;
+      }
+      window.speechSynthesis?.cancel();
+      onEndCallbackRef.current = null;
+      isLoadingRef.current = false;
+    }, []);
  
    const isSpeaking = useCallback(() => {
      if (audioRef.current && !audioRef.current.paused) {
