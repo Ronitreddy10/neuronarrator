@@ -167,10 +167,9 @@ const Index = () => {
     setAnalysisState("analyzing");
 
     try {
-      // Step 1: Face detection — SKIP for the first 2 captures to get fast initial descriptions
-      // Also skip if models aren't loaded yet (they load lazily)
+      // Step 1: Face detection with 2s timeout — skip gracefully on slow devices
       let knownFaces: KnownFaceInfo[] = [];
-      if (thisCaptureNum > 2 && isModelsLoaded) {
+      if (isModelsLoaded) {
         const video = cameraRef.current?.getVideoElement();
         if (video && video.readyState >= 2) {
           try {
