@@ -31,6 +31,7 @@ const Index = () => {
   const [showWarning, setShowWarning] = useState(false);
   const [mode, setMode] = useState<VisionMode>("general");
   const [captureRequestId, setCaptureRequestId] = useState(0);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
   const isAnalyzingRef = useRef(false);
   const isActiveRef = useRef(false);
   const loopFallbackTimerRef = useRef<number | null>(null);
@@ -207,13 +208,19 @@ const Index = () => {
       stop();
       stopHaptic();
     } else {
-      // CRITICAL: Unlock audio on iOS/Safari before starting
-      await unlockAudioForMobile();
-      
+      // CRITICAL: Enable camera SYNCHRONOUSLY in the tap handler
+      // so getUserMedia fires within the user gesture on iOS Safari
+      setCameraEnabled(true);
       setIsAutoCapturing(true);
       isActiveRef.current = true;
-      // Trigger first capture
-      setCaptureRequestId(1);
+      
+      // Audio unlock can happen async — it's for TTS, not camera
+      unlockAudioForMobile();
+      
+      // Trigger first capture after a short delay to let camera initialize
+      setTimeout(() => {
+        setCaptureRequestId(1);
+      }, 1500);
     }
   };
 
@@ -250,6 +257,7 @@ const Index = () => {
         priority={priority}
         smartLoopEnabled={true}
         captureRequestId={captureRequestId}
+        cameraEnabled={cameraEnabled}
       />
 
       {/* Warning Banner */}
