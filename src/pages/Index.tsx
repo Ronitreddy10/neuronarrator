@@ -24,24 +24,24 @@ const Index = () => {
    const [priority, setPriority] = useState(0);
    const [showWarning, setShowWarning] = useState(false);
   const [mode, setMode] = useState<VisionMode>("general");
+  const [captureRequestId, setCaptureRequestId] = useState(0);
    const isAnalyzingRef = useRef(false);
-  const shouldContinueLoopRef = useRef(false);
-  const pendingNextCaptureRef = useRef<(() => void) | null>(null);
+  const isActiveRef = useRef(false);
  
    const { speak, stop } = useNeuroVoice();
    const { sosPattern } = useHaptics();
    const { playHapticMessage, stopHaptic, isPlaying: isHapticPlaying, currentChar, currentDots } = useHapticBraille();
    const { playHazardSound } = useHazardSound();
  
-  // Smart loop: called when speech ends to trigger next capture
+  // Trigger next capture in the smart loop
   const triggerNextCapture = useCallback(() => {
-    if (shouldContinueLoopRef.current && pendingNextCaptureRef.current) {
-      // Small delay to prevent overwhelming the system
+    if (isActiveRef.current) {
+      // Small delay then request next capture
       setTimeout(() => {
-        if (shouldContinueLoopRef.current && pendingNextCaptureRef.current) {
-          pendingNextCaptureRef.current();
+        if (isActiveRef.current) {
+          setCaptureRequestId(prev => prev + 1);
         }
-      }, 300);
+      }, 200);
     }
   }, []);
 
@@ -92,16 +92,10 @@ const Index = () => {
      }
   }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, triggerNextCapture]);
 
-  // Register the next capture callback
-  const handleRequestNextCapture = useCallback((captureFunc: () => void) => {
-    pendingNextCaptureRef.current = captureFunc;
-  }, []);
- 
    const toggleAutoCapture = () => {
      if (isAutoCapturing) {
        setIsAutoCapturing(false);
-      shouldContinueLoopRef.current = false;
-      pendingNextCaptureRef.current = null;
+      isActiveRef.current = false;
        setAnalysisState("idle");
        setCaptionText("");
       setTextContent("");
@@ -111,7 +105,9 @@ const Index = () => {
        stopHaptic();
      } else {
        setIsAutoCapturing(true);
-      shouldContinueLoopRef.current = true;
+      isActiveRef.current = true;
+      // Trigger first capture
+      setCaptureRequestId(1);
      }
    };
  
@@ -133,10 +129,7 @@ const Index = () => {
          isAnalyzing={analysisState === "analyzing"}
          priority={priority}
         smartLoopEnabled={true}
-        onRequestNextCapture={() => handleRequestNextCapture(() => {
-          // This will be called to trigger next capture
-          // The LiveCamera will handle the actual capture
-        })}
+        captureRequestId={captureRequestId}
        />
  
        {/* Warning Banner */}

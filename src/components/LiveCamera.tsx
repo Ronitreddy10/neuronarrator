@@ -10,7 +10,7 @@ import { AnimatePresence, motion } from "framer-motion";
    isAnalyzing: boolean;
    priority: number;
   smartLoopEnabled: boolean;
-  onRequestNextCapture?: () => void;
+  captureRequestId: number; // Increment this to trigger a new capture
  }
  
  export const LiveCamera = ({
@@ -19,12 +19,13 @@ import { AnimatePresence, motion } from "framer-motion";
    isAnalyzing,
    priority,
   smartLoopEnabled,
-  onRequestNextCapture,
+  captureRequestId,
  }: LiveCameraProps) => {
    const webcamRef = useRef<Webcam>(null);
    const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
    const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const isCapturingRef = useRef(false);
+  const lastCaptureRequestIdRef = useRef(0);
  
   const captureFrame = useCallback(async () => {
     if (isCapturingRef.current) return;
@@ -37,14 +38,10 @@ import { AnimatePresence, motion } from "framer-motion";
           await onCapture(screenshot);
         } finally {
           isCapturingRef.current = false;
-          // Signal ready for next capture (for smart loop)
-          if (smartLoopEnabled && onRequestNextCapture) {
-            onRequestNextCapture();
-          }
         }
        }
      }
-  }, [onCapture, smartLoopEnabled, onRequestNextCapture]);
+  }, [onCapture]);
  
   // Legacy interval mode (when smart loop is disabled)
    useEffect(() => {
@@ -69,12 +66,26 @@ import { AnimatePresence, motion } from "framer-motion";
      };
   }, [isAutoCapturing, isAnalyzing, captureFrame, smartLoopEnabled]);
 
-  // Smart loop: trigger first capture when activated
+  // Smart loop: respond to capture requests from parent
   useEffect(() => {
-    if (isAutoCapturing && smartLoopEnabled && !isAnalyzing && !isCapturingRef.current) {
+    // Only capture if this is a new request and we're actively scanning
+    if (
+      isAutoCapturing && 
+      smartLoopEnabled && 
+      captureRequestId > lastCaptureRequestIdRef.current &&
+      !isCapturingRef.current
+    ) {
+      lastCaptureRequestIdRef.current = captureRequestId;
       captureFrame();
     }
-  }, [isAutoCapturing, smartLoopEnabled]);
+  }, [isAutoCapturing, smartLoopEnabled, captureRequestId, captureFrame]);
+
+  // Reset request ID when stopping
+  useEffect(() => {
+    if (!isAutoCapturing) {
+      lastCaptureRequestIdRef.current = 0;
+    }
+  }, [isAutoCapturing]);
  
    const flipCamera = () => {
      setFacingMode((prev) => (prev === "user" ? "environment" : "user"));
