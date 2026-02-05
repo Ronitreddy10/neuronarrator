@@ -1,5 +1,4 @@
- import { Settings, History, Eye, Pause } from "lucide-react";
- import { Scan, Loader2 } from "lucide-react";
+ import { Settings, History, Play, Square, Loader2 } from "lucide-react";
  import { cn } from "@/lib/utils";
  
  interface ControlDeckProps {
@@ -31,24 +30,20 @@
              <Settings className="w-6 h-6 text-muted-foreground" />
            </button>
  
-           {/* Main Analyze Button */}
+           {/* Main Start/Stop Toggle Button */}
            <button
-             onClick={hasImage ? onAnalyze : undefined}
-             disabled={!hasImage || isAnalyzing}
+             onClick={onToggle}
              className={cn(
-               "tactile-button relative w-20 h-20 rounded-full flex items-center justify-center group",
-               !hasImage && "opacity-50 cursor-not-allowed"
+               "tactile-button relative w-20 h-20 rounded-full flex items-center justify-center group"
              )}
            >
              {/* Outer pulsing ring */}
              <div
                className={cn(
                  "absolute inset-0 rounded-full border-2 transition-colors duration-300",
-                 isAnalyzing
-                   ? "border-ios-blue pulse-ring"
-                   : hasImage
-                   ? "border-foreground/30 pulse-ring"
-                   : "border-foreground/20"
+                 isActive
+                   ? "border-ios-red pulse-ring"
+                   : "border-foreground/30"
                )}
              />
              
@@ -56,7 +51,7 @@
              <div
                className={cn(
                  "absolute inset-2 rounded-full border transition-colors duration-300",
-                 isAnalyzing ? "border-ios-blue/50" : "border-foreground/20"
+                 isActive ? "border-ios-red/50" : "border-foreground/20"
                )}
              />
              
@@ -64,17 +59,19 @@
              <div
                className={cn(
                  "absolute inset-3 rounded-full flex items-center justify-center transition-all duration-300",
-                 isAnalyzing
-                   ? "bg-ios-blue shadow-glow-blue"
-                   : hasImage
-                   ? "bg-surface-elevated border border-glass-border"
-                   : "bg-surface border border-glass-border"
+                 isActive
+                   ? "bg-ios-red shadow-glow-red"
+                   : "bg-surface-elevated border border-glass-border"
                )}
              >
-               {isAnalyzing ? (
-                 <Loader2 className="w-7 h-7 text-foreground animate-spin" />
+               {isActive ? (
+                 isAnalyzing ? (
+                   <Loader2 className="w-7 h-7 text-foreground animate-spin" />
+                 ) : (
+                   <Square className="w-6 h-6 text-foreground fill-current" />
+                 )
                ) : (
-                 <Scan className="w-7 h-7 text-foreground" />
+                 <Play className="w-7 h-7 text-foreground fill-current ml-1" />
                )}
              </div>
            </button>
