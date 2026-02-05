@@ -1,6 +1,6 @@
 import { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef } from "react";
 import Webcam from "react-webcam";
-import { SwitchCamera, Loader2 } from "lucide-react";
+import { SwitchCamera, Loader2, Camera } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -27,63 +27,50 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
 }, ref) => {
   const webcamRef = useRef<Webcam>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
-  const [cameraKey, setCameraKey] = useState(0); // Force remount on iOS
+  const [cameraKey, setCameraKey] = useState(0);
   const [isFlipping, setIsFlipping] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const isCapturingRef = useRef(false);
   const lastCaptureRequestIdRef = useRef(0);
 
-  // Expose video element to parent via ref
   useImperativeHandle(ref, () => ({
-    getVideoElement: () => {
-      return webcamRef.current?.video ?? null;
-    }
+    getVideoElement: () => webcamRef.current?.video ?? null,
   }), []);
  
   const captureFrame = useCallback(async () => {
     if (isCapturingRef.current) return;
-    
     if (webcamRef.current) {
-       const screenshot = webcamRef.current.getScreenshot();
-       if (screenshot) {
+      const screenshot = webcamRef.current.getScreenshot();
+      if (screenshot) {
         isCapturingRef.current = true;
         try {
           await onCapture(screenshot);
         } finally {
           isCapturingRef.current = false;
         }
-       }
-     }
+      }
+    }
   }, [onCapture]);
  
-  // Legacy interval mode (when smart loop is disabled)
-   useEffect(() => {
+  // Legacy interval mode
+  useEffect(() => {
     if (!isAutoCapturing || smartLoopEnabled) {
       if (intervalRef.current) clearInterval(intervalRef.current);
       return;
-     }
-    
+    }
     if (isAnalyzing || isCapturingRef.current) return;
-    
-    // Initial capture
     captureFrame();
-    
     intervalRef.current = setInterval(() => {
-      if (!isAnalyzing && !isCapturingRef.current) {
-        captureFrame();
-      }
+      if (!isAnalyzing && !isCapturingRef.current) captureFrame();
     }, 3500);
- 
-     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-     };
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [isAutoCapturing, isAnalyzing, captureFrame, smartLoopEnabled]);
 
-  // Smart loop: respond to capture requests from parent
+  // Smart loop
   useEffect(() => {
     if (
-      isAutoCapturing && 
-      smartLoopEnabled && 
+      isAutoCapturing && smartLoopEnabled &&
       captureRequestId > lastCaptureRequestIdRef.current &&
       !isCapturingRef.current
     ) {
@@ -92,72 +79,80 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
     }
   }, [isAutoCapturing, smartLoopEnabled, captureRequestId, captureFrame]);
 
-  // Reset request ID when stopping
   useEffect(() => {
-    if (!isAutoCapturing) {
-      lastCaptureRequestIdRef.current = 0;
-    }
+    if (!isAutoCapturing) lastCaptureRequestIdRef.current = 0;
   }, [isAutoCapturing]);
  
-  // iOS-compatible camera flip - completely remount the component
   const flipCamera = useCallback(async () => {
     if (isFlipping) return;
-    
     setIsFlipping(true);
-    
-    // Stop current stream if possible
     const video = webcamRef.current?.video;
     if (video && video.srcObject) {
-      const tracks = (video.srcObject as MediaStream).getTracks();
-      tracks.forEach(track => track.stop());
+      (video.srcObject as MediaStream).getTracks().forEach(t => t.stop());
     }
-    
-    // Toggle facing mode and force remount
     setFacingMode(prev => prev === "user" ? "environment" : "user");
     setCameraKey(prev => prev + 1);
-    
-    // Give time for remount
-    setTimeout(() => {
-      setIsFlipping(false);
-    }, 500);
+    setCameraError(null);
+    setTimeout(() => setIsFlipping(false), 500);
   }, [isFlipping]);
+
+  const handleCameraError = useCallback((err: string | DOMException) => {
+    console.error("Camera error:", err);
+    const msg = typeof err === "string" ? err : err.message;
+    if (msg.includes("NotAllowed") || msg.includes("Permission denied")) {
+      setCameraError("Camera access denied. Go to Settings → Safari → Camera and allow this site.");
+    } else if (msg.includes("NotFound") || msg.includes("Requested device not found")) {
+      setCameraError("No camera found on this device.");
+    } else {
+      setCameraError(`Camera error: ${msg}`);
+    }
+  }, []);
  
   const videoConstraints = {
-    facingMode: facingMode,
+    facingMode,
     width: { ideal: 1280 },
     height: { ideal: 720 },
   };
-
-  // Track if camera was ever started (persists after stopping so preview stays)
-  const [cameraStarted, setCameraStarted] = useState(false);
-
-  useEffect(() => {
-    if (isAutoCapturing && !cameraStarted) {
-      setCameraStarted(true);
-    }
-  }, [isAutoCapturing, cameraStarted]);
-
-  const shouldMountCamera = cameraStarted;
  
   return (
     <div className="fixed inset-0 z-0">
-      {/* Full-screen webcam - only mount after user gesture for iOS Safari */}
-      {shouldMountCamera ? (
-        <Webcam
-          key={`camera-${cameraKey}-${facingMode}`}
-          ref={webcamRef}
-          audio={false}
-          screenshotFormat="image/jpeg"
-          videoConstraints={videoConstraints}
-          playsInline
-          onUserMediaError={(err) => console.error("Camera error:", err)}
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-      ) : (
-        <div className="absolute inset-0 bg-black flex items-center justify-center">
-          <p className="text-muted-foreground text-sm">Tap Start to activate camera</p>
-        </div>
-      )}
+      {/* Always mount webcam — iOS needs it in the initial render tree */}
+      <Webcam
+        key={`camera-${cameraKey}-${facingMode}`}
+        ref={webcamRef}
+        audio={false}
+        screenshotFormat="image/jpeg"
+        videoConstraints={videoConstraints}
+        playsInline
+        onUserMedia={() => setCameraError(null)}
+        onUserMediaError={handleCameraError}
+        className="absolute inset-0 w-full h-full object-cover"
+      />
+
+      {/* Camera error overlay */}
+      <AnimatePresence>
+        {cameraError && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center z-10 px-8"
+          >
+            <Camera className="w-12 h-12 text-muted-foreground mb-4" />
+            <p className="text-foreground text-center text-sm font-medium mb-2">Camera Unavailable</p>
+            <p className="text-muted-foreground text-center text-xs leading-relaxed">{cameraError}</p>
+            <button
+              onClick={() => {
+                setCameraError(null);
+                setCameraKey(prev => prev + 1);
+              }}
+              className="mt-6 px-6 py-2 rounded-full bg-surface border border-glass-border text-foreground text-sm"
+            >
+              Try Again
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Flip transition overlay */}
       <AnimatePresence>
@@ -173,7 +168,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
         )}
       </AnimatePresence>
 
-      {/* Red flash overlay for high priority hazards */}
+      {/* Red flash for hazards */}
       <div
         className={cn(
           "absolute inset-0 pointer-events-none transition-opacity duration-100",
@@ -194,35 +189,35 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
         <SwitchCamera className={cn("w-6 h-6 text-foreground", isFlipping && "animate-spin")} />
       </button>
  
-        {/* Analyzing indicator */}
-        <AnimatePresence>
-          {isAnalyzing && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute top-4 right-4 z-10 px-3 py-2 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center gap-2"
-            >
-              <Loader2 className="w-4 h-4 text-ios-blue animate-spin" />
-              <span className="text-xs font-medium text-muted-foreground">Reading...</span>
-            </motion.div>
-          )}
-        </AnimatePresence>
+      {/* Analyzing indicator */}
+      <AnimatePresence>
+        {isAnalyzing && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute top-4 right-4 z-10 px-3 py-2 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border flex items-center gap-2"
+          >
+            <Loader2 className="w-4 h-4 text-ios-blue animate-spin" />
+            <span className="text-xs font-medium text-muted-foreground">Reading...</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-       {/* Recording indicator */}
-        <AnimatePresence>
-          {isAutoCapturing && !isAnalyzing && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute top-4 right-4 z-10 flex items-center gap-2 px-3 py-2 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border"
-            >
-              <div className="w-3 h-3 rounded-full bg-ios-red animate-pulse" />
-              <span className="text-xs font-medium text-foreground">LIVE</span>
-            </motion.div>
-          )}
-        </AnimatePresence>
+      {/* Recording indicator */}
+      <AnimatePresence>
+        {isAutoCapturing && !isAnalyzing && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute top-4 right-4 z-10 flex items-center gap-2 px-3 py-2 rounded-full bg-surface/80 backdrop-blur-xl border border-glass-border"
+          >
+            <div className="w-3 h-3 rounded-full bg-ios-red animate-pulse" />
+            <span className="text-xs font-medium text-foreground">LIVE</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 });
