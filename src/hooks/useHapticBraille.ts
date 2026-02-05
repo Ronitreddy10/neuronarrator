@@ -1,6 +1,6 @@
  import { useState, useCallback, useRef } from "react";
  
- // Standard Braille dot patterns (6-dot cell: dots 1-6)
+ // Standard Braille dot patterns for haptic feedback (6-dot cell: dots 1-6)
  // Dot positions: 1 4
  //                2 5
  //                3 6
