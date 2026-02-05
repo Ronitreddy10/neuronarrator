@@ -77,7 +77,7 @@ const Index = () => {
          playHazardSound(result.priority);
         speak(`Warning! ${result.description}`, 10, { onEnd: triggerNextCapture });
         // Fallback in case Web Speech API never fires onend on some devices
-        loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 8000);
+        loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 4000);
          // Extract hazard keyword and play Braille haptic
          const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
          playHapticMessage(hazardWord);
@@ -86,14 +86,14 @@ const Index = () => {
          setShowWarning(false);
          playHazardSound(result.priority);
         speak(speechText, 5, { onEnd: triggerNextCapture });
-        loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 8000);
+        loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 4000);
        }
      } catch (error) {
        console.error("Analysis error:", error);
        setAnalysisState("error");
        const errorMsg = error instanceof Error ? error.message : "Unknown error";
       speak("System Error. " + errorMsg, 10, { onEnd: triggerNextCapture });
-      loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 8000);
+      loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 4000);
        setCaptionText(errorMsg);
       setTextContent("");
      } finally {
