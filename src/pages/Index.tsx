@@ -2,14 +2,14 @@
 import { DynamicIsland } from "@/components/DynamicIsland";
  import { ImageUploadZone } from "@/components/ImageUploadZone";
 import { ControlDeck } from "@/components/ControlDeck";
- import { SettingsModal, getStoredApiKey, getStoredVisionModel } from "@/components/SettingsModal";
+ import { SettingsModal } from "@/components/SettingsModal";
  import { WarningBanner } from "@/components/WarningBanner";
  import { CaptionDisplay } from "@/components/CaptionDisplay";
  import { useNeuroVoice } from "@/hooks/useNeuroVoice";
  import { useHaptics } from "@/hooks/useHaptics";
  import { useHapticBraille } from "@/hooks/useHapticBraille";
  import { HapticBrailleIndicator } from "@/components/HapticBrailleIndicator";
- import { analyzeImageWithOpenAI } from "@/services/vision";
+ import { analyzeImage as analyzeImageService } from "@/services/vision";
  
  type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 
@@ -45,15 +45,7 @@ const Index = () => {
      stopHaptic();
    };
  
-   const analyzeImage = useCallback(async () => {
-     const apiKey = getStoredApiKey();
-     
-     if (!apiKey) {
-       speak("Please configure your API key in settings.", 10);
-       setSettingsOpen(true);
-       return;
-     }
- 
+   const runAnalysis = useCallback(async () => {
      if (!uploadedImage) return;
  
      setAnalysisState("analyzing");
@@ -62,9 +54,7 @@ const Index = () => {
      setShowWarning(false);
  
      try {
-      const result = await analyzeImageWithOpenAI(uploadedImage, apiKey, {
-        model: getStoredVisionModel(),
-      });
+       const result = await analyzeImageService(uploadedImage);
  
        setPriority(result.priority);
        setCaptionText(result.description);
@@ -152,7 +142,7 @@ const Index = () => {
          isActive={analysisState === "analyzing"}
          onToggle={() => {}}
          onSettingsClick={() => setSettingsOpen(true)}
-         onAnalyze={analyzeImage}
+         onAnalyze={runAnalysis}
          hasImage={!!uploadedImage}
          isAnalyzing={analysisState === "analyzing"}
        />
