@@ -3,6 +3,7 @@ import { DynamicIsland } from "@/components/DynamicIsland";
 import { LiveCamera, type LiveCameraRef } from "@/components/LiveCamera";
 import { ControlDeck } from "@/components/ControlDeck";
 import { SettingsModal } from "@/components/SettingsModal";
+import { type RelationType } from "@/lib/faceDatabase";
 import { WarningBanner } from "@/components/WarningBanner";
 import { CaptionDisplay } from "@/components/CaptionDisplay";
 import { ModeToggle } from "@/components/ModeToggle";
@@ -50,7 +51,8 @@ const Index = () => {
     detectAndMatch,
     registerCurrentFace,
     loadModels,
-    clearAllFaces
+    clearAllFaces,
+    generateSpeechText
   } = useFaceRecognition();
 
   // Load face recognition models on mount
@@ -73,10 +75,13 @@ const Index = () => {
       if (video && video.readyState >= 2) {
         const match = await detectAndMatch(video);
         
-        // Announce newly recognized faces
-        if (match?.known && match.name) {
-          // Only speak if this is a different person than last announcement
-          speak(`I see ${match.name}`, 3, {});
+        // Announce faces with contextual information
+        if (match) {
+          const speechText = generateSpeechText(match);
+          // Only speak if we have something to say
+          if (speechText && (match.known || !match.known)) {
+            speak(speechText, 3, {});
+          }
         }
       }
     };
@@ -185,10 +190,10 @@ const Index = () => {
     }
   };
 
-  const handleRegisterFace = async (name: string): Promise<boolean> => {
-    const success = await registerCurrentFace(name);
+  const handleRegisterFace = async (name: string, relation: RelationType): Promise<boolean> => {
+    const success = await registerCurrentFace(name, relation);
     if (success) {
-      speak(`Face saved as ${name}`, 5, {});
+      speak(`Face saved as ${name}, your ${relation.toLowerCase()}`, 5, {});
     }
     return success;
   };

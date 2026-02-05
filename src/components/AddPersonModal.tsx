@@ -7,15 +7,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { UserPlus, Loader2 } from "lucide-react";
+import { UserPlus, Loader2, Users } from "lucide-react";
+import { RELATION_OPTIONS, type RelationType } from "@/lib/faceDatabase";
 
 interface AddPersonModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (name: string) => Promise<boolean>;
+  onSave: (name: string, relation: RelationType) => Promise<boolean>;
   isProcessing?: boolean;
 }
 
@@ -26,6 +34,7 @@ export const AddPersonModal = ({
   isProcessing = false
 }: AddPersonModalProps) => {
   const [name, setName] = useState("");
+  const [relation, setRelation] = useState<RelationType>("Acquaintance");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -46,9 +55,10 @@ export const AddPersonModal = ({
     setIsSaving(true);
 
     try {
-      const success = await onSave(trimmedName);
+      const success = await onSave(trimmedName, relation);
       if (success) {
         setName("");
+        setRelation("Acquaintance");
         onClose();
       } else {
         setError("Failed to save face. Please try again.");
@@ -62,6 +72,7 @@ export const AddPersonModal = ({
 
   const handleClose = () => {
     setName("");
+    setRelation("Acquaintance");
     setError("");
     onClose();
   };
@@ -81,12 +92,13 @@ export const AddPersonModal = ({
             Who is this?
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Enter a name for the person currently in front of the camera.
-            They will be recognized automatically next time.
+            Enter a name and relationship for the person in front of the camera.
+            They will be recognized and announced with context next time.
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-4">
+          {/* Name Input */}
           <div className="grid gap-2">
             <Label htmlFor="name" className="text-foreground">
               Name
@@ -101,10 +113,42 @@ export const AddPersonModal = ({
               autoFocus
               className="bg-background/50 border-glass-border text-foreground placeholder:text-muted-foreground"
             />
-            {error && (
-              <p className="text-sm text-ios-red">{error}</p>
-            )}
           </div>
+
+          {/* Relationship Dropdown */}
+          <div className="grid gap-2">
+            <Label htmlFor="relation" className="text-foreground flex items-center gap-2">
+              <Users className="w-4 h-4 text-muted-foreground" />
+              Relationship
+            </Label>
+            <Select
+              value={relation}
+              onValueChange={(value) => setRelation(value as RelationType)}
+              disabled={isSaving}
+            >
+              <SelectTrigger 
+                id="relation"
+                className="bg-background/50 border-glass-border text-foreground"
+              >
+                <SelectValue placeholder="Select relationship..." />
+              </SelectTrigger>
+              <SelectContent className="bg-surface border-glass-border z-[100]">
+                {RELATION_OPTIONS.map((option) => (
+                  <SelectItem 
+                    key={option} 
+                    value={option}
+                    className="text-foreground hover:bg-accent focus:bg-accent"
+                  >
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {error && (
+            <p className="text-sm text-ios-red">{error}</p>
+          )}
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
