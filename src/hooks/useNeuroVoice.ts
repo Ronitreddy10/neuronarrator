@@ -1,16 +1,53 @@
- import { useCallback, useRef } from "react";
- import { supabase } from "@/integrations/supabase/client";
- 
- interface SpeakOptions {
-   priority?: number;
-   rate?: number;
-   pitch?: number;
-   speaker?: "anushka" | "abhilash";
+import { useCallback, useRef } from "react";
+import { supabase } from "@/integrations/supabase/client";
+
+interface SpeakOptions {
+  priority?: number;
+  rate?: number;
+  pitch?: number;
+  speaker?: "anushka" | "abhilash";
   onEnd?: () => void;
- }
- 
- export const useNeuroVoice = () => {
-   const audioRef = useRef<HTMLAudioElement | null>(null);
+}
+
+// iOS/Safari requires audio context to be unlocked by user gesture
+let audioContextUnlocked = false;
+let silentAudio: HTMLAudioElement | null = null;
+
+// Call this on first user tap to unlock audio on iOS
+export const unlockAudioForMobile = (): Promise<void> => {
+  return new Promise((resolve) => {
+    if (audioContextUnlocked) {
+      resolve();
+      return;
+    }
+
+    // Create a silent audio element and play it
+    silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+    silentAudio.volume = 0.01;
+    
+    const playPromise = silentAudio.play();
+    if (playPromise !== undefined) {
+      playPromise
+        .then(() => {
+          console.log("iOS audio unlocked successfully");
+          audioContextUnlocked = true;
+          resolve();
+        })
+        .catch((e) => {
+          console.warn("Could not unlock audio:", e);
+          // Still mark as attempted so we don't block
+          audioContextUnlocked = true;
+          resolve();
+        });
+    } else {
+      audioContextUnlocked = true;
+      resolve();
+    }
+  });
+};
+
+export const useNeuroVoice = () => {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const onEndCallbackRef = useRef<(() => void) | null>(null);
    const isLoadingRef = useRef(false);
    const abortControllerRef = useRef<AbortController | null>(null);

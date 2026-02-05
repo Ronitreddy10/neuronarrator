@@ -9,7 +9,7 @@ import { CaptionDisplay } from "@/components/CaptionDisplay";
 import { ModeToggle } from "@/components/ModeToggle";
 import { AddPersonModal } from "@/components/AddPersonModal";
 import { FaceRecognitionOverlay } from "@/components/FaceRecognitionOverlay";
-import { useNeuroVoice } from "@/hooks/useNeuroVoice";
+import { useNeuroVoice, unlockAudioForMobile } from "@/hooks/useNeuroVoice";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useHapticBraille } from "@/hooks/useHapticBraille";
 import { useHazardSound } from "@/hooks/useHazardSound";
@@ -167,7 +167,7 @@ const Index = () => {
     }
   }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, triggerNextCapture]);
 
-  const toggleAutoCapture = () => {
+  const toggleAutoCapture = async () => {
     if (isAutoCapturing) {
       setIsAutoCapturing(false);
       isActiveRef.current = false;
@@ -183,6 +183,10 @@ const Index = () => {
       stop();
       stopHaptic();
     } else {
+      // CRITICAL: Unlock audio on iOS/Safari before starting
+      // This must happen in response to a user gesture (the tap)
+      await unlockAudioForMobile();
+      
       setIsAutoCapturing(true);
       isActiveRef.current = true;
       // Trigger first capture
