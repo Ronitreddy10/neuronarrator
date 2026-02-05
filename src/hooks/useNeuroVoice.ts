@@ -51,11 +51,14 @@
          throw new Error("No audio data");
        }
  
-       // Create audio from base64
-       const audioBlob = await fetch(`data:audio/wav;base64,${data.audioBase64}`).then(r => r.blob());
+       // Create audio from base64 - Sarvam returns audio/mpeg format
+       const audioBlob = await fetch(`data:audio/mpeg;base64,${data.audioBase64}`).then(r => r.blob());
        const audioUrl = URL.createObjectURL(audioBlob);
        const audio = new Audio(audioUrl);
        audioRef.current = audio;
+ 
+       // Set volume
+       audio.volume = 1.0;
  
        audio.onended = () => {
          URL.revokeObjectURL(audioUrl);
@@ -67,7 +70,7 @@
        };
  
        audio.onerror = (e) => {
-         console.warn("Audio playback error:", e);
+         console.error("Audio playback error:", e);
          URL.revokeObjectURL(audioUrl);
          if (onEndCallbackRef.current) {
            onEndCallbackRef.current();
@@ -76,7 +79,14 @@
          isLoadingRef.current = false;
        };
  
-       await audio.play();
+       // Play with user interaction handling
+       try {
+         await audio.play();
+         console.log("Sarvam audio playing");
+       } catch (playError) {
+         console.error("Audio play failed:", playError);
+         throw playError;
+       }
      } catch (err) {
        console.error("Sarvam TTS failed, falling back to browser TTS:", err);
        isLoadingRef.current = false;
