@@ -9,51 +9,65 @@ interface SpeakOptions {
   onEnd?: () => void;
 }
 
-// iOS/Safari requires audio context to be unlocked by user gesture
-let audioContextUnlocked = false;
-let silentAudio: HTMLAudioElement | null = null;
+// ── Web Audio API singleton (much more reliable than HTML Audio on iOS) ──
+let audioCtx: AudioContext | null = null;
+let audioCtxUnlocked = false;
 
-// Call this on first user tap to unlock audio on iOS
+function getAudioContext(): AudioContext {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  }
+  return audioCtx;
+}
+
+// Call this ONCE on the very first user tap — unlocks audio playback on iOS/Safari
 export const unlockAudioForMobile = (): Promise<void> => {
   return new Promise((resolve) => {
-    if (audioContextUnlocked) {
+    if (audioCtxUnlocked) {
       resolve();
       return;
     }
 
-    // Create a silent audio element and play it
-    silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
-    silentAudio.volume = 0.01;
-    
-    const playPromise = silentAudio.play();
-    if (playPromise !== undefined) {
-      playPromise
-        .then(() => {
-          console.log("iOS audio unlocked successfully");
-          audioContextUnlocked = true;
-          resolve();
-        })
-        .catch((e) => {
-          console.warn("Could not unlock audio:", e);
-          // Still mark as attempted so we don't block
-          audioContextUnlocked = true;
-          resolve();
-        });
+    const ctx = getAudioContext();
+
+    // iOS requires resume() inside a user gesture
+    if (ctx.state === "suspended") {
+      ctx.resume().then(() => {
+        console.log("AudioContext unlocked (resumed)");
+        audioCtxUnlocked = true;
+        resolve();
+      }).catch(() => {
+        console.warn("AudioContext resume failed, still proceeding");
+        audioCtxUnlocked = true;
+        resolve();
+      });
     } else {
-      audioContextUnlocked = true;
+      console.log("AudioContext already running");
+      audioCtxUnlocked = true;
       resolve();
+    }
+
+    // Also play a tiny silent buffer to be extra safe (some iOS versions need this)
+    try {
+      const buffer = ctx.createBuffer(1, 1, 22050);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(0);
+    } catch (e) {
+      // ignore
     }
   });
 };
 
 export const useNeuroVoice = () => {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const onEndCallbackRef = useRef<(() => void) | null>(null);
   const isLoadingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const safetyTimerRef = useRef<number | null>(null);
- 
-   const fireOnEnd = useCallback(() => {
+
+  const fireOnEnd = useCallback(() => {
     if (safetyTimerRef.current) {
       window.clearTimeout(safetyTimerRef.current);
       safetyTimerRef.current = null;
@@ -66,165 +80,161 @@ export const useNeuroVoice = () => {
     isLoadingRef.current = false;
   }, []);
 
-   const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
+  const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
     // If there's nothing to say, don't stall smart-loop callers waiting for onend.
     if (!text || !text.trim()) {
       if (options.onEnd) options.onEnd();
       return;
     }
 
-     // Cancel any ongoing speech/request
-     if (safetyTimerRef.current) {
-       window.clearTimeout(safetyTimerRef.current);
-       safetyTimerRef.current = null;
-     }
-     if (abortControllerRef.current) {
-       abortControllerRef.current.abort();
-     }
-     if (audioRef.current) {
-       audioRef.current.pause();
-       audioRef.current.currentTime = 0;
-       audioRef.current = null;
-     }
-     window.speechSynthesis?.cancel();
- 
-     onEndCallbackRef.current = options.onEnd || null;
-     isLoadingRef.current = true;
-     abortControllerRef.current = new AbortController();
- 
-     try {
-       const { data, error } = await supabase.functions.invoke('text-to-speech', {
-         body: {
-           text,
-           speaker: options.speaker ?? "anushka",
-         },
-       });
- 
-       // Check if aborted
-       if (abortControllerRef.current?.signal.aborted) {
-         return;
-       }
- 
-       if (error) {
-         console.error("TTS edge function error:", error);
-         throw error;
-       }
- 
-       // Handle rate limiting or timeout gracefully - fall back to browser TTS
-       if (data?.rateLimited || data?.useBrowserFallback) {
-         console.warn("TTS unavailable (rate limited or timeout), using browser fallback");
-         throw new Error("Use browser fallback");
-       }
+    // Cancel any ongoing speech/request
+    if (safetyTimerRef.current) {
+      window.clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    // Stop current Web Audio playback
+    if (currentSourceRef.current) {
+      try { currentSourceRef.current.stop(); } catch {}
+      currentSourceRef.current = null;
+    }
+    window.speechSynthesis?.cancel();
 
-       if (!data?.audioBase64) {
-         console.error("No audio data returned");
-         throw new Error("No audio data");
-       }
- 
-       // Create audio from base64 - Sarvam returns audio/mpeg format
-       const audioBlob = await fetch(`data:audio/mpeg;base64,${data.audioBase64}`).then(r => r.blob());
-       const audioUrl = URL.createObjectURL(audioBlob);
-       const audio = new Audio(audioUrl);
-       audioRef.current = audio;
- 
-       // Set volume
-       audio.volume = 1.0;
- 
-       audio.onended = () => {
-          console.log("Audio ended, triggering next capture");
-          URL.revokeObjectURL(audioUrl);
+    onEndCallbackRef.current = options.onEnd || null;
+    isLoadingRef.current = true;
+    abortControllerRef.current = new AbortController();
+
+    try {
+      const { data, error } = await supabase.functions.invoke('text-to-speech', {
+        body: {
+          text,
+          speaker: options.speaker ?? "anushka",
+        },
+      });
+
+      // Check if aborted
+      if (abortControllerRef.current?.signal.aborted) return;
+
+      if (error) {
+        console.error("TTS edge function error:", error);
+        throw error;
+      }
+
+      // Handle rate limiting or timeout gracefully
+      if (data?.rateLimited || data?.useBrowserFallback) {
+        console.warn("TTS unavailable, using browser fallback");
+        throw new Error("Use browser fallback");
+      }
+
+      if (!data?.audioBase64) {
+        console.error("No audio data returned");
+        throw new Error("No audio data");
+      }
+
+      // ── Play via Web Audio API (reliable on iOS) ──
+      const ctx = getAudioContext();
+
+      // Make sure context is running (iOS can suspend it)
+      if (ctx.state === "suspended") {
+        await ctx.resume();
+      }
+
+      // Decode base64 → ArrayBuffer → AudioBuffer
+      const binaryString = atob(data.audioBase64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
+
+      // Check again if aborted during decode
+      if (abortControllerRef.current?.signal.aborted) return;
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+
+      source.onended = () => {
+        console.log("Web Audio ended, triggering next capture");
+        currentSourceRef.current = null;
+        fireOnEnd();
+      };
+
+      currentSourceRef.current = source;
+      source.start(0);
+      console.log("Web Audio playing via AudioContext");
+
+      // Safety timer: guarantee onEnd fires
+      const durationMs = (audioBuffer.duration * 1000) + 1500;
+      safetyTimerRef.current = window.setTimeout(() => {
+        console.warn("Safety timer: forcing onEnd (audio event may have not fired)");
+        currentSourceRef.current = null;
+        fireOnEnd();
+      }, durationMs);
+
+    } catch (err) {
+      // Check if aborted - don't fallback if intentionally cancelled
+      if (abortControllerRef.current?.signal.aborted) return;
+
+      console.error("Sarvam TTS failed, falling back to browser TTS:", err);
+
+      // Fallback to browser TTS
+      if (window.speechSynthesis) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = options.rate ?? 1.0;
+        utterance.pitch = options.pitch ?? 1.0;
+        utterance.volume = 1.0;
+
+        utterance.onend = () => {
+          console.log("Browser TTS ended, triggering next capture");
           fireOnEnd();
         };
- 
-        audio.onerror = (e) => {
-          console.error("Audio playback error:", e);
-          URL.revokeObjectURL(audioUrl);
+
+        utterance.onerror = (e) => {
+          console.error("Browser TTS error:", e);
           fireOnEnd();
         };
- 
-        // Play with user interaction handling
-        try {
-          await audio.play();
-          console.log("Sarvam audio playing");
-          // SAFETY: guarantee onEnd fires even if audio events silently fail (iOS quirk)
-          // Estimate audio duration — fallback to 7s if we can't determine it
-          const estimatedDuration = (audio.duration && isFinite(audio.duration)) 
-            ? (audio.duration * 1000) + 1000 
-            : 7000;
-          safetyTimerRef.current = window.setTimeout(() => {
-            console.warn("Safety timer: forcing onEnd (audio event may have not fired)");
-            fireOnEnd();
-          }, estimatedDuration);
-        } catch (playError) {
-          console.error("Audio play failed:", playError);
-          throw playError;
-        }
-      } catch (err) {
-        // Check if aborted - don't fallback if intentionally cancelled
-        if (abortControllerRef.current?.signal.aborted) {
-          return;
-        }
- 
-        console.error("Sarvam TTS failed, falling back to browser TTS:", err);
- 
-        // Fallback to browser TTS
-        if (window.speechSynthesis) {
-          const utterance = new SpeechSynthesisUtterance(text);
-          utterance.rate = options.rate ?? 1.0;
-          utterance.pitch = options.pitch ?? 1.0;
-          utterance.volume = 1.0;
- 
-          utterance.onend = () => {
-            console.log("Browser TTS ended, triggering next capture");
-            fireOnEnd();
-          };
- 
-          utterance.onerror = (e) => {
-            console.error("Browser TTS error:", e);
-            fireOnEnd();
-          };
- 
-          window.speechSynthesis.speak(utterance);
-          // Safety timer for browser TTS too
-          safetyTimerRef.current = window.setTimeout(() => {
-            console.warn("Safety timer: forcing onEnd for browser TTS");
-            fireOnEnd();
-          }, 7000);
-        } else {
-          // No fallback available, trigger callback anyway
-          console.log("No TTS available, triggering next capture immediately");
+
+        window.speechSynthesis.speak(utterance);
+        // Safety timer for browser TTS
+        safetyTimerRef.current = window.setTimeout(() => {
+          console.warn("Safety timer: forcing onEnd for browser TTS");
           fireOnEnd();
-        }
+        }, 7000);
+      } else {
+        console.log("No TTS available, triggering next capture immediately");
+        fireOnEnd();
       }
-    }, [fireOnEnd]);
- 
-    const stop = useCallback(() => {
-      if (safetyTimerRef.current) {
-        window.clearTimeout(safetyTimerRef.current);
-        safetyTimerRef.current = null;
-      }
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        abortControllerRef.current = null;
-      }
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-        audioRef.current = null;
-      }
-      window.speechSynthesis?.cancel();
-      onEndCallbackRef.current = null;
-      isLoadingRef.current = false;
-    }, []);
- 
-   const isSpeaking = useCallback(() => {
-     if (audioRef.current && !audioRef.current.paused) {
-       return true;
-     }
-     return window.speechSynthesis?.speaking ?? false;
-   }, []);
- 
-   const isLoading = useCallback(() => isLoadingRef.current, []);
- 
-   return { speak, stop, isSpeaking, isLoading };
- };
+    }
+  }, [fireOnEnd]);
+
+  const stop = useCallback(() => {
+    if (safetyTimerRef.current) {
+      window.clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (currentSourceRef.current) {
+      try { currentSourceRef.current.stop(); } catch {}
+      currentSourceRef.current = null;
+    }
+    window.speechSynthesis?.cancel();
+    onEndCallbackRef.current = null;
+    isLoadingRef.current = false;
+  }, []);
+
+  const isSpeaking = useCallback(() => {
+    if (currentSourceRef.current) return true;
+    return window.speechSynthesis?.speaking ?? false;
+  }, []);
+
+  const isLoading = useCallback(() => isLoadingRef.current, []);
+
+  return { speak, stop, isSpeaking, isLoading };
+};
