@@ -35,6 +35,7 @@ const Index = () => {
   const isActiveRef = useRef(false);
   const loopFallbackTimerRef = useRef<number | null>(null);
   const cameraRef = useRef<LiveCameraRef>(null);
+  const lastDescriptionRef = useRef<string>("");
 
   const { speak, stop, isSpeaking } = useNeuroVoice();
   const { sosPattern } = useHaptics();
@@ -61,21 +62,35 @@ const Index = () => {
     loadModels();
   }, [loadModels]);
 
-  // Voice command handler - "Neuro remember [name]"
-  const handleVoiceRemember = useCallback((name: string) => {
-    if (!lastUnknownDescriptor) {
-      speak("I don't see an unknown face right now. Let me see someone first.", 5, {});
+  // Voice command handler — truly hands-free: runs face detection RIGHT NOW
+  const handleVoiceRemember = useCallback(async (name: string) => {
+    const video = cameraRef.current?.getVideoElement();
+    if (!video || video.readyState < 2 || !isModelsLoaded) {
+      speak("I can't see anyone right now. Make sure the camera is on.", 5, {});
       return;
     }
-    // Auto-register with "Friend" as default relation, user can change later
-    registerCurrentFace(name, "Friend").then(success => {
-      if (success) {
-        speak(`Got it. I'll remember ${name} as your friend.`, 5, {});
+
+    // Run face detection IMMEDIATELY — don't rely on stale state
+    const match = await detectAndMatch(video);
+    
+    if (!match || match.known) {
+      // Either no face detected or already known
+      if (match?.known) {
+        speak(`I already know ${match.name}. No need to save again.`, 5, {});
       } else {
-        speak(`Sorry, I couldn't save that face. Please try again.`, 5, {});
+        speak("I don't see a face right now. Try facing the camera.", 5, {});
       }
-    });
-  }, [lastUnknownDescriptor, registerCurrentFace, speak]);
+      return;
+    }
+
+    // We have an unknown face — register it
+    const success = await registerCurrentFace(name, "Friend");
+    if (success) {
+      speak(`Got it, I'll remember ${name}.`, 5, {});
+    } else {
+      speak(`Couldn't save that face. Try again.`, 5, {});
+    }
+  }, [isModelsLoaded, detectAndMatch, registerCurrentFace, speak]);
 
   const handleVoiceClear = useCallback(() => {
     clearAllFaces();
@@ -125,12 +140,13 @@ const Index = () => {
         }
       }
 
-      // Step 2: Send image + face names to vision API
-      const result = await analyzeImageService(base64, mode, knownFaces);
+      // Step 2: Send image + face names + previous description to vision API
+      const result = await analyzeImageService(base64, mode, knownFaces, lastDescriptionRef.current);
 
       setPriority(result.priority);
       setCaptionText(result.description);
       setTextContent(result.text_content);
+      lastDescriptionRef.current = result.description;
 
       // The AI description now includes face names naturally — no separate announcements needed
       const speechText = mode === "reader" 

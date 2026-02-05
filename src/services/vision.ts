@@ -17,10 +17,11 @@ export interface KnownFaceInfo {
 export async function analyzeImage(
   base64Image: string, 
   mode: VisionMode = "general",
-  knownFaces: KnownFaceInfo[] = []
+  knownFaces: KnownFaceInfo[] = [],
+  previousDescription: string = ""
 ): Promise<VisionResponse> {
   const { data, error } = await supabase.functions.invoke("analyze-image", {
-    body: { imageBase64: base64Image, mode, knownFaces },
+    body: { imageBase64: base64Image, mode, knownFaces, previousDescription },
   });
  
    if (error) {
