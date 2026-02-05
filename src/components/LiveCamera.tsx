@@ -60,7 +60,8 @@
    };
  
    const videoConstraints = {
-     facingMode,
+    // Some browsers (notably iOS Safari) require a remount + ideal/exact facingMode shape
+    facingMode: { ideal: facingMode },
      width: { ideal: 1920 },
      height: { ideal: 1080 },
    };
@@ -69,10 +70,12 @@
      <div className="fixed inset-0 z-0">
        {/* Full-screen webcam */}
        <Webcam
+        key={facingMode}
          ref={webcamRef}
          audio={false}
          screenshotFormat="image/jpeg"
          videoConstraints={videoConstraints}
+        onUserMediaError={(err) => console.error("Camera error:", err)}
          className="absolute inset-0 w-full h-full object-cover"
        />
  
