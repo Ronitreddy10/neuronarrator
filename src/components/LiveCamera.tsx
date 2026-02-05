@@ -127,19 +127,37 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
     width: { ideal: 1280 },
     height: { ideal: 720 },
   };
+
+  // Track if camera was ever started (persists after stopping so preview stays)
+  const [cameraStarted, setCameraStarted] = useState(false);
+
+  useEffect(() => {
+    if (isAutoCapturing && !cameraStarted) {
+      setCameraStarted(true);
+    }
+  }, [isAutoCapturing, cameraStarted]);
+
+  const shouldMountCamera = cameraStarted;
  
   return (
     <div className="fixed inset-0 z-0">
-      {/* Full-screen webcam - key forces remount on flip */}
-      <Webcam
-        key={`camera-${cameraKey}-${facingMode}`}
-        ref={webcamRef}
-        audio={false}
-        screenshotFormat="image/jpeg"
-        videoConstraints={videoConstraints}
-        onUserMediaError={(err) => console.error("Camera error:", err)}
-        className="absolute inset-0 w-full h-full object-cover"
-      />
+      {/* Full-screen webcam - only mount after user gesture for iOS Safari */}
+      {shouldMountCamera ? (
+        <Webcam
+          key={`camera-${cameraKey}-${facingMode}`}
+          ref={webcamRef}
+          audio={false}
+          screenshotFormat="image/jpeg"
+          videoConstraints={videoConstraints}
+          playsInline
+          onUserMediaError={(err) => console.error("Camera error:", err)}
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+      ) : (
+        <div className="absolute inset-0 bg-black flex items-center justify-center">
+          <p className="text-muted-foreground text-sm">Tap Start to activate camera</p>
+        </div>
+      )}
 
       {/* Flip transition overlay */}
       <AnimatePresence>
