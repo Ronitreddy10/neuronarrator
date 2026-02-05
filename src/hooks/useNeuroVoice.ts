@@ -1,4 +1,4 @@
- import { useCallback, useRef, useState } from "react";
+ import { useCallback, useRef } from "react";
  import { supabase } from "@/integrations/supabase/client";
  
  interface SpeakOptions {
@@ -12,7 +12,7 @@
  export const useNeuroVoice = () => {
    const audioRef = useRef<HTMLAudioElement | null>(null);
   const onEndCallbackRef = useRef<(() => void) | null>(null);
-   const [isLoading, setIsLoading] = useState(false);
+   const isLoadingRef = useRef(false);
  
    const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
     // If there's nothing to say, don't stall smart-loop callers waiting for onend.
@@ -31,7 +31,7 @@
      }
  
      onEndCallbackRef.current = options.onEnd || null;
-     setIsLoading(true);
+     isLoadingRef.current = true;
  
      try {
        const { data, error } = await supabase.functions.invoke('text-to-speech', {
@@ -63,7 +63,7 @@
            onEndCallbackRef.current();
            onEndCallbackRef.current = null;
          }
-         setIsLoading(false);
+         isLoadingRef.current = false;
        };
  
        audio.onerror = (e) => {
@@ -73,13 +73,13 @@
            onEndCallbackRef.current();
            onEndCallbackRef.current = null;
          }
-         setIsLoading(false);
+         isLoadingRef.current = false;
        };
  
        await audio.play();
      } catch (err) {
        console.error("Sarvam TTS failed, falling back to browser TTS:", err);
-       setIsLoading(false);
+       isLoadingRef.current = false;
  
        // Fallback to browser TTS
        if (window.speechSynthesis) {
@@ -121,7 +121,7 @@
      }
      window.speechSynthesis?.cancel();
     onEndCallbackRef.current = null;
-     setIsLoading(false);
+     isLoadingRef.current = false;
    }, []);
  
    const isSpeaking = useCallback(() => {
@@ -130,6 +130,8 @@
      }
      return window.speechSynthesis?.speaking ?? false;
    }, []);
+ 
+   const isLoading = useCallback(() => isLoadingRef.current, []);
  
    return { speak, stop, isSpeaking, isLoading };
  };
