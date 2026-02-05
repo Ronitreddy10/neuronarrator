@@ -31,7 +31,7 @@
            animate={{ opacity: 1, y: 0 }}
            exit={{ opacity: 0, y: 16 }}
            transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-           className="fixed bottom-36 left-4 right-4 z-30"
+           className="fixed bottom-44 left-4 right-4 z-30"
          >
            <motion.div 
              className="bg-gradient-to-br from-black/90 to-black/80 backdrop-blur-2xl rounded-3xl p-5 max-h-52 overflow-y-auto border border-white/10 shadow-2xl"
