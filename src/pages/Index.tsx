@@ -7,6 +7,8 @@ import { ControlDeck } from "@/components/ControlDeck";
  import { CaptionDisplay } from "@/components/CaptionDisplay";
  import { useNeuroVoice } from "@/hooks/useNeuroVoice";
  import { useHaptics } from "@/hooks/useHaptics";
+ import { useHapticBraille } from "@/hooks/useHapticBraille";
+ import { HapticBrailleIndicator } from "@/components/HapticBrailleIndicator";
  import { analyzeImageWithOpenAI } from "@/services/vision";
  
  type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
@@ -21,6 +23,7 @@ const Index = () => {
  
    const { speak, stop } = useNeuroVoice();
    const { sosPattern } = useHaptics();
+   const { playHapticMessage, stopHaptic, isPlaying: isHapticPlaying, currentChar, currentDots } = useHapticBraille();
  
    const handleImageSelect = (base64: string) => {
      setUploadedImage(base64);
@@ -29,6 +32,7 @@ const Index = () => {
      setPriority(0);
      setShowWarning(false);
      stop();
+     stopHaptic();
    };
  
    const handleClearImage = () => {
@@ -38,6 +42,7 @@ const Index = () => {
      setPriority(0);
      setShowWarning(false);
      stop();
+     stopHaptic();
    };
  
    const analyzeImage = useCallback(async () => {
@@ -70,6 +75,9 @@ const Index = () => {
          setShowWarning(true);
          sosPattern();
          speak(`Warning! ${result.description}`, 10);
+         // Extract hazard keyword and play Braille haptic
+         const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
+         playHapticMessage(hazardWord);
        } else {
          setAnalysisState("success");
          speak(result.description, 5);
@@ -81,7 +89,7 @@ const Index = () => {
       speak("System Error. " + errorMsg, 10);
       setCaptionText(errorMsg);
      }
-   }, [uploadedImage, speak, sosPattern]);
+   }, [uploadedImage, speak, sosPattern, playHapticMessage]);
  
    const getStatusText = () => {
      if (analysisState === "analyzing") return "Processing visual context...";
@@ -130,6 +138,13 @@ const Index = () => {
          text={captionText}
          isVisible={analysisState === "success" || analysisState === "warning" || analysisState === "error"}
          priority={priority}
+       />
+ 
+       {/* Haptic Braille Indicator */}
+       <HapticBrailleIndicator
+         isPlaying={isHapticPlaying}
+         currentChar={currentChar}
+         currentDots={currentDots}
        />
  
        {/* Control Deck */}
