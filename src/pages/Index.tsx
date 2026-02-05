@@ -7,14 +7,9 @@ import { ControlDeck } from "@/components/ControlDeck";
  import { CaptionDisplay } from "@/components/CaptionDisplay";
  import { useNeuroVoice } from "@/hooks/useNeuroVoice";
  import { useHaptics } from "@/hooks/useHaptics";
+ import { analyzeImageWithOpenAI } from "@/services/vision";
  
  type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
- 
- interface GeminiResponse {
-   description: string;
-   hazards: string[];
-   priority: number;
- }
 
 const Index = () => {
    const [analysisState, setAnalysisState] = useState<AnalysisState>("idle");
@@ -62,66 +57,7 @@ const Index = () => {
      setShowWarning(false);
  
      try {
-       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-         {
-           method: "POST",
-           headers: {
-             "Content-Type": "application/json",
-           },
-           body: JSON.stringify({
-             contents: [
-               {
-                 parts: [
-                   {
-                     text: `You are an assistive vision AI. Analyze this image for a visually impaired user. Return a strict JSON object: { "description": "concise scene description", "hazards": ["list of physical hazards"], "priority": 1-10 }. If priority > 7, keep the description extremely short and focus on the danger. Return ONLY the JSON object, no markdown or other text.`,
-                   },
-                   {
-                     inline_data: {
-                       mime_type: "image/jpeg",
-                       data: uploadedImage,
-                     },
-                   },
-                 ],
-               },
-             ],
-           }),
-         }
-       );
- 
-       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMessage = errorData?.error?.message || "API request failed";
-        
-        if (response.status === 429) {
-          throw new Error("Rate limit exceeded. Please wait a moment and try again, or check your API quota.");
-        }
-        if (response.status === 400) {
-          throw new Error("Invalid API key. Please check your key in settings.");
-        }
-         throw new Error("API request failed");
-       }
- 
-       const data = await response.json();
-       const textContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
- 
-       if (!textContent) {
-         throw new Error("No response content");
-       }
- 
-       // Parse JSON from response (handle potential markdown code blocks)
-       let jsonStr = textContent.trim();
-       if (jsonStr.startsWith("```json")) {
-         jsonStr = jsonStr.slice(7);
-       }
-       if (jsonStr.startsWith("```")) {
-         jsonStr = jsonStr.slice(3);
-       }
-       if (jsonStr.endsWith("```")) {
-         jsonStr = jsonStr.slice(0, -3);
-       }
- 
-       const result: GeminiResponse = JSON.parse(jsonStr.trim());
+       const result = await analyzeImageWithOpenAI(uploadedImage, apiKey);
  
        setPriority(result.priority);
        setCaptionText(result.description);
