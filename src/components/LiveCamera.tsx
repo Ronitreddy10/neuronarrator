@@ -11,6 +11,7 @@ interface LiveCameraProps {
   priority: number;
   smartLoopEnabled: boolean;
   captureRequestId: number;
+  cameraEnabled: boolean;
 }
 
 export interface LiveCameraRef {
@@ -24,6 +25,7 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   priority,
   smartLoopEnabled,
   captureRequestId,
+  cameraEnabled,
 }, ref) => {
   const webcamRef = useRef<Webcam>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
@@ -116,18 +118,22 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
  
   return (
     <div className="fixed inset-0 z-0">
-      {/* Always mount webcam — iOS needs it in the initial render tree */}
-      <Webcam
-        key={`camera-${cameraKey}-${facingMode}`}
-        ref={webcamRef}
-        audio={false}
-        screenshotFormat="image/jpeg"
-        videoConstraints={videoConstraints}
-        playsInline
-        onUserMedia={() => setCameraError(null)}
-        onUserMediaError={handleCameraError}
-        className="absolute inset-0 w-full h-full object-cover"
-      />
+      {/* Mount webcam only after user gesture (cameraEnabled) for iOS Safari */}
+      {cameraEnabled ? (
+        <Webcam
+          key={`camera-${cameraKey}-${facingMode}`}
+          ref={webcamRef}
+          audio={false}
+          screenshotFormat="image/jpeg"
+          videoConstraints={videoConstraints}
+          playsInline
+          onUserMedia={() => setCameraError(null)}
+          onUserMediaError={handleCameraError}
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+      ) : (
+        <div className="absolute inset-0 bg-black" />
+      )}
 
       {/* Camera error overlay */}
       <AnimatePresence>
