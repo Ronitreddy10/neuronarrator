@@ -8,14 +8,14 @@
    base64Image: string,
    apiKey: string
  ): Promise<VisionResponse> {
-   const response = await fetch("https://api.x.ai/v1/chat/completions", {
+   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
      method: "POST",
      headers: {
        "Content-Type": "application/json",
        Authorization: `Bearer ${apiKey}`,
      },
      body: JSON.stringify({
-       model: "grok-2-vision-1212",
+       model: "llama-3.2-90b-vision-preview",
        messages: [
          {
            role: "system",
@@ -50,7 +50,7 @@
        throw new Error("Rate limit exceeded. Please wait and try again.");
      }
      if (response.status === 401) {
-       throw new Error("Invalid API key. Please check your Grok key in settings.");
+       throw new Error("Invalid API key. Please check your Groq key in settings.");
      }
      throw new Error(errorMessage);
    }
