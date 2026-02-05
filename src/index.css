@@ -45,6 +45,9 @@
     --glass-bg: 0 0% 0% / 0.7;
     --glass-border: 0 0% 100% / 0.1;
     --viewfinder-glow: 211 100% 52% / 0.3;
+   
+   /* Glow effects */
+   --shadow-glow-red: 0 0 20px hsl(0 100% 61% / 0.5);
   }
 
   .dark {
@@ -128,6 +131,14 @@
 
   .pulse-glow {
     animation: pulse-glow 3s ease-in-out infinite;
+  }
+ 
+  .shadow-glow-red {
+    box-shadow: 0 0 20px hsl(var(--ios-red) / 0.5);
+  }
+ 
+  .shadow-glow-blue {
+    box-shadow: 0 0 20px hsl(var(--ios-blue) / 0.5);
   }
 
   .status-analyzing {
