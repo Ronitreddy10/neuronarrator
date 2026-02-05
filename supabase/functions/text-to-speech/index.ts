@@ -60,24 +60,44 @@ serve(async (req) => {
 
     console.log("Calling Sarvam TTS API with speaker:", speaker, "text length:", truncatedText.length);
 
-    const response = await fetch("https://api.sarvam.ai/text-to-speech", {
-      method: "POST",
-      headers: {
-        "api-subscription-key": SARVAM_API_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        inputs: [truncatedText],
-        target_language_code: "en-IN",
-        speaker: speaker,
-        model: "bulbul:v2",
-        pitch: 0,
-        pace: 1.1,
-        loudness: 1.5,
-        speech_sample_rate: 22050,
-        enable_preprocessing: true,
-      }),
-    });
+    // 8-second timeout to avoid 504 gateway timeouts stalling the loop
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    let response: Response;
+    try {
+      response = await fetch("https://api.sarvam.ai/text-to-speech", {
+        method: "POST",
+        headers: {
+          "api-subscription-key": SARVAM_API_KEY,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          inputs: [truncatedText],
+          target_language_code: "en-IN",
+          speaker: speaker,
+          model: "bulbul:v2",
+          pitch: 0,
+          pace: 1.1,
+          loudness: 1.5,
+          speech_sample_rate: 22050,
+          enable_preprocessing: true,
+        }),
+      });
+    } catch (fetchErr) {
+      clearTimeout(timeout);
+      const isTimeout = fetchErr instanceof DOMException && fetchErr.name === "AbortError";
+      console.error(isTimeout ? "Sarvam TTS timed out after 8s" : "Sarvam TTS fetch error:", fetchErr);
+      return new Response(
+        JSON.stringify({ 
+          error: isTimeout ? "TTS request timed out" : "TTS request failed", 
+          useBrowserFallback: true 
+        }),
+        { status: 504, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    clearTimeout(timeout);
 
     if (!response.ok) {
       const errorText = await response.text();
