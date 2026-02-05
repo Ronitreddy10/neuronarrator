@@ -27,6 +27,7 @@ const Index = () => {
   const [captureRequestId, setCaptureRequestId] = useState(0);
    const isAnalyzingRef = useRef(false);
   const isActiveRef = useRef(false);
+  const loopFallbackTimerRef = useRef<number | null>(null);
  
    const { speak, stop } = useNeuroVoice();
    const { sosPattern } = useHaptics();
@@ -35,6 +36,10 @@ const Index = () => {
  
   // Trigger next capture in the smart loop
   const triggerNextCapture = useCallback(() => {
+    if (loopFallbackTimerRef.current) {
+      window.clearTimeout(loopFallbackTimerRef.current);
+      loopFallbackTimerRef.current = null;
+    }
     if (isActiveRef.current) {
       // Small delay then request next capture
       setTimeout(() => {
@@ -71,6 +76,8 @@ const Index = () => {
          sosPattern();
          playHazardSound(result.priority);
         speak(`Warning! ${result.description}`, 10, { onEnd: triggerNextCapture });
+        // Fallback in case Web Speech API never fires onend on some devices
+        loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 8000);
          // Extract hazard keyword and play Braille haptic
          const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
          playHapticMessage(hazardWord);
@@ -79,12 +86,14 @@ const Index = () => {
          setShowWarning(false);
          playHazardSound(result.priority);
         speak(speechText, 5, { onEnd: triggerNextCapture });
+        loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 8000);
        }
      } catch (error) {
        console.error("Analysis error:", error);
        setAnalysisState("error");
        const errorMsg = error instanceof Error ? error.message : "Unknown error";
       speak("System Error. " + errorMsg, 10, { onEnd: triggerNextCapture });
+      loopFallbackTimerRef.current = window.setTimeout(triggerNextCapture, 8000);
        setCaptionText(errorMsg);
       setTextContent("");
      } finally {
@@ -96,6 +105,10 @@ const Index = () => {
      if (isAutoCapturing) {
        setIsAutoCapturing(false);
       isActiveRef.current = false;
+      if (loopFallbackTimerRef.current) {
+        window.clearTimeout(loopFallbackTimerRef.current);
+        loopFallbackTimerRef.current = null;
+      }
        setAnalysisState("idle");
        setCaptionText("");
       setTextContent("");
