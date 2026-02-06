@@ -153,7 +153,7 @@ const Index = () => {
           setCaptureRequestId(prev => prev + 1);
         }
       }
-    }, 8000);
+    }, 6000);
 
     return () => {
       if (watchdogTimerRef.current) {
