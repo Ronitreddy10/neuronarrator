@@ -30,7 +30,6 @@ export const unlockAudioForMobile = (): Promise<void> => {
 
     const ctx = getAudioContext();
 
-    // iOS requires resume() inside a user gesture
     if (ctx.state === "suspended") {
       ctx.resume().then(() => {
         console.log("AudioContext unlocked (resumed)");
@@ -47,7 +46,7 @@ export const unlockAudioForMobile = (): Promise<void> => {
       resolve();
     }
 
-    // Also play a tiny silent buffer to be extra safe (some iOS versions need this)
+    // Play a tiny silent buffer to be extra safe (some iOS versions need this)
     try {
       const buffer = ctx.createBuffer(1, 1, 22050);
       const source = ctx.createBufferSource();
@@ -60,37 +59,40 @@ export const unlockAudioForMobile = (): Promise<void> => {
   });
 };
 
+// Global generation counter — prevents stale responses from playing
+let speakGeneration = 0;
+
 export const useNeuroVoice = () => {
   const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const onEndCallbackRef = useRef<(() => void) | null>(null);
-  const isLoadingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const safetyTimerRef = useRef<number | null>(null);
-  // Mutex: prevents ANY new speak() from starting until previous one fully cleans up
-  const speakingLockRef = useRef(false);
+  // Track whether audio is actively playing (NOT loading)
+  const isPlayingRef = useRef(false);
 
-  const fireOnEnd = useCallback(() => {
+  const clearTimers = useCallback(() => {
     if (safetyTimerRef.current) {
       window.clearTimeout(safetyTimerRef.current);
       safetyTimerRef.current = null;
     }
-    const cb = onEndCallbackRef.current;
-    onEndCallbackRef.current = null;
-    isLoadingRef.current = false;
-    speakingLockRef.current = false;
-    if (cb) cb();
   }, []);
 
-  // Full cleanup of any current audio — returns true if something was stopped
-  const cleanupCurrentAudio = useCallback(() => {
-    if (safetyTimerRef.current) {
-      window.clearTimeout(safetyTimerRef.current);
-      safetyTimerRef.current = null;
-    }
+  const fireOnEnd = useCallback(() => {
+    clearTimers();
+    isPlayingRef.current = false;
+    const cb = onEndCallbackRef.current;
+    onEndCallbackRef.current = null;
+    if (cb) cb();
+  }, [clearTimers]);
+
+  const stopCurrentAudio = useCallback(() => {
+    clearTimers();
+    // Abort any pending TTS fetch
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
-    // CRITICAL: Clear callback BEFORE stopping to prevent stale onended
+    // Clear callback BEFORE stopping to prevent stale onended from firing
     onEndCallbackRef.current = null;
     if (currentSourceRef.current) {
       currentSourceRef.current.onended = null;
@@ -98,25 +100,29 @@ export const useNeuroVoice = () => {
       currentSourceRef.current = null;
     }
     window.speechSynthesis?.cancel();
-    isLoadingRef.current = false;
-    speakingLockRef.current = false;
-  }, []);
+    isPlayingRef.current = false;
+  }, [clearTimers]);
 
   const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
     if (!text || !text.trim()) {
+      console.log("[TTS] Empty text, skipping");
       if (options.onEnd) options.onEnd();
       return;
     }
 
-    // Acquire speaking lock — prevents double voice
-    cleanupCurrentAudio();
-    speakingLockRef.current = true;
+    // Stop anything currently playing/loading
+    stopCurrentAudio();
+
+    // Track this generation to detect stale responses
+    speakGeneration += 1;
+    const thisGen = speakGeneration;
 
     onEndCallbackRef.current = options.onEnd || null;
-    isLoadingRef.current = true;
+
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const signal = controller.signal;
+
+    console.log("[TTS] Starting speak, gen:", thisGen, "text:", text.slice(0, 50));
 
     try {
       const { data, error } = await supabase.functions.invoke('text-to-speech', {
@@ -126,29 +132,29 @@ export const useNeuroVoice = () => {
         },
       });
 
-      // Check if THIS request was aborted (not the current controller — it may be a new one)
-      if (signal.aborted) return;
+      // If a newer speak() was called while we were waiting, discard this result
+      if (thisGen !== speakGeneration) {
+        console.log("[TTS] Stale response (gen", thisGen, "vs", speakGeneration, "), discarding");
+        return;
+      }
 
       if (error) {
-        console.error("TTS edge function error:", error);
+        console.error("[TTS] Edge function error:", error);
         throw error;
       }
 
-      // Handle rate limiting or timeout gracefully
       if (data?.rateLimited || data?.useBrowserFallback) {
-        console.warn("TTS unavailable, using browser fallback");
+        console.warn("[TTS] Rate limited or fallback requested");
         throw new Error("Use browser fallback");
       }
 
       if (!data?.audioBase64) {
-        console.error("No audio data returned");
+        console.error("[TTS] No audio data returned");
         throw new Error("No audio data");
       }
 
-      // ── Play via Web Audio API (reliable on iOS) ──
+      // ── Play via Web Audio API ──
       const ctx = getAudioContext();
-
-      // Make sure context is running (iOS can suspend it)
       if (ctx.state === "suspended") {
         await ctx.resume();
       }
@@ -162,36 +168,44 @@ export const useNeuroVoice = () => {
 
       const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
 
-      // Check again if aborted during decode
-      if (signal.aborted) return;
+      // Check again if stale after decode
+      if (thisGen !== speakGeneration) {
+        console.log("[TTS] Stale after decode, discarding");
+        return;
+      }
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(ctx.destination);
 
       source.onended = () => {
-        console.log("Web Audio ended, triggering next capture");
-        currentSourceRef.current = null;
-        fireOnEnd();
+        console.log("[TTS] Audio playback ended (gen:", thisGen, ")");
+        if (thisGen === speakGeneration) {
+          currentSourceRef.current = null;
+          fireOnEnd();
+        }
       };
 
       currentSourceRef.current = source;
+      isPlayingRef.current = true;
       source.start(0);
-      console.log("Web Audio playing via AudioContext");
+      console.log("[TTS] Audio playing via Web Audio API");
 
-      // Safety timer: guarantee onEnd fires
-      const durationMs = (audioBuffer.duration * 1000) + 1500;
+      // Safety timer: guarantee onEnd fires even if onended doesn't
+      const durationMs = (audioBuffer.duration * 1000) + 2000;
       safetyTimerRef.current = window.setTimeout(() => {
-        console.warn("Safety timer: forcing onEnd (audio event may have not fired)");
-        currentSourceRef.current = null;
-        fireOnEnd();
+        console.warn("[TTS] Safety timer fired (gen:", thisGen, ")");
+        if (thisGen === speakGeneration) {
+          currentSourceRef.current = null;
+          fireOnEnd();
+        }
       }, durationMs);
 
     } catch (err) {
-      // Check if aborted - don't fallback if intentionally cancelled
-      if (signal.aborted) return;
+      // If a newer generation took over, just bail
+      if (thisGen !== speakGeneration) return;
 
-      console.error("Sarvam TTS failed, falling back to browser TTS:", err);
+      console.error("[TTS] Sarvam TTS failed, trying browser fallback:", err);
 
       // Fallback to browser TTS
       if (window.speechSynthesis) {
@@ -201,40 +215,42 @@ export const useNeuroVoice = () => {
         utterance.volume = 1.0;
 
         utterance.onend = () => {
-          console.log("Browser TTS ended, triggering next capture");
-          fireOnEnd();
+          console.log("[TTS] Browser TTS ended");
+          if (thisGen === speakGeneration) fireOnEnd();
         };
 
         utterance.onerror = (e) => {
-          console.error("Browser TTS error:", e);
-          fireOnEnd();
+          console.error("[TTS] Browser TTS error:", e);
+          if (thisGen === speakGeneration) fireOnEnd();
         };
 
+        isPlayingRef.current = true;
         window.speechSynthesis.speak(utterance);
+
         // Safety timer for browser TTS
         safetyTimerRef.current = window.setTimeout(() => {
-          console.warn("Safety timer: forcing onEnd for browser TTS");
-          fireOnEnd();
+          console.warn("[TTS] Browser TTS safety timer fired");
+          if (thisGen === speakGeneration) fireOnEnd();
         }, 7000);
       } else {
-        console.log("No TTS available, triggering next capture immediately");
+        console.log("[TTS] No TTS available, firing onEnd immediately");
         fireOnEnd();
       }
     }
-  }, [fireOnEnd]);
+  }, [fireOnEnd, stopCurrentAudio]);
 
   const stop = useCallback(() => {
-    cleanupCurrentAudio();
-  }, [cleanupCurrentAudio]);
+    stopCurrentAudio();
+  }, [stopCurrentAudio]);
 
   const isSpeaking = useCallback(() => {
-    // Use the lock as the primary indicator — most reliable
-    if (speakingLockRef.current) return true;
+    // Only true when audio is actively playing, NOT during loading
+    if (isPlayingRef.current) return true;
     if (currentSourceRef.current) return true;
     return window.speechSynthesis?.speaking ?? false;
   }, []);
 
-  const isLoading = useCallback(() => isLoadingRef.current, []);
+  const isLoading = useCallback(() => false, []);
 
   return { speak, stop, isSpeaking, isLoading };
 };
