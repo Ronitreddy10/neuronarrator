@@ -95,8 +95,12 @@ export const useNeuroVoice = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    // Stop current Web Audio playback
+    // CRITICAL: Clear old callback BEFORE stopping, so the `onended` event
+    // fired by stop() doesn't trigger the stale callback (causes double voice).
+    onEndCallbackRef.current = null;
+    // Remove handler before stopping to prevent stale onended firing
     if (currentSourceRef.current) {
+      currentSourceRef.current.onended = null;
       try { currentSourceRef.current.stop(); } catch {}
       currentSourceRef.current = null;
     }
@@ -220,12 +224,14 @@ export const useNeuroVoice = () => {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    // Clear callback + handler BEFORE stopping to prevent stale onended
+    onEndCallbackRef.current = null;
     if (currentSourceRef.current) {
+      currentSourceRef.current.onended = null;
       try { currentSourceRef.current.stop(); } catch {}
       currentSourceRef.current = null;
     }
     window.speechSynthesis?.cancel();
-    onEndCallbackRef.current = null;
     isLoadingRef.current = false;
   }, []);
 

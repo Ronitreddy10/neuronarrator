@@ -143,7 +143,8 @@ const Index = () => {
     }
 
     watchdogTimerRef.current = window.setInterval(() => {
-      if (isActiveRef.current && !isAnalyzingRef.current) {
+      // Only force capture if nothing is playing or analyzing — respect smooth transitions
+      if (isActiveRef.current && !isAnalyzingRef.current && !isSpeaking()) {
         console.log("Watchdog: forcing next capture (loop may have stalled)");
         setCaptureRequestId(prev => prev + 1);
       }
@@ -160,6 +161,9 @@ const Index = () => {
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     // Prevent concurrent requests
     if (isAnalyzingRef.current) return;
+    // Smooth transition: if TTS is still speaking, skip this frame.
+    // The current speech's onEnd will trigger the next capture naturally.
+    if (isSpeaking()) return;
     isAnalyzingRef.current = true;
     captureCountRef.current += 1;
     const thisCaptureNum = captureCountRef.current;
@@ -237,7 +241,7 @@ const Index = () => {
     } finally {
       isAnalyzingRef.current = false;
     }
-  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch]);
+  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isSpeaking]);
 
   const toggleAutoCapture = () => {
     if (isAutoCapturing) {
