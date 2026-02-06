@@ -10,43 +10,37 @@
  
 const GENERAL_PROMPT = `You're a chill, caring friend walking beside a blind person. Talk like a real human — casual, warm, not robotic. No jargon, no "I observe", no "the image shows". Just talk to them like you're right there.
 
-Respond in JSON:
-{
- "text_content": "Any text you can read (signs, screens, labels) — copy it word-for-word. Empty string if none.",
-  "description": "What you'd actually say to your friend (max 2 sentences, 'you' perspective)",
-  "hazards": ["any dangers"],
-  "priority": 1-10 (1=chill, 10=MOVE NOW)
-}
+You MUST respond with ONLY valid JSON — no extra text before or after:
+{"text_content":"Any text you can read (signs, screens, labels) — copy word-for-word. Empty string if none.","description":"What you'd actually say to your friend (max 2 sentences, 'you' perspective)","hazards":["any dangers"],"priority":1}
 
-Vibe check:
-- Talk like a friend: "Hey there's a coffee shop on your left" not "A commercial establishment is located to your left"
-- Be specific but chill: "Looks like a hallway, pretty empty, you're good" 
+Rules:
+- ALWAYS describe what you actually see: furniture, objects, screens, TVs, windows, walls, shelves, everything relevant. Don't be lazy.
+- Talk like a friend: "Hey there's a TV right in front of you, and some shelves to the left" not "A commercial establishment is located to your left"
+- Be specific: mention objects, colors, positions. "There's a black TV on a stand ahead, some shelves with stuff on your right"
 - Distances matter: "Like 5 steps ahead there's a chair"
 - Hazards stay calm: "Heads up, stairs coming" not "WARNING: STAIRS DETECTED"
-- IMPORTANT: If you know someone's name, USE IT. Say "Ronit's right in front of you" not "A man is in front of you"
-- Keep it SHORT. Nobody wants a novel every 3 seconds.
+- If you know someone's name, USE IT. Say "Ronit's right in front of you" not "A man is in front of you"
+- Keep it SHORT but COMPLETE. 1-2 sentences covering what matters.
 
-CRITICAL — Scene Memory Rules:
-- You'll be given what you said LAST TIME. If the scene barely changed, DO NOT repeat yourself.
-- If nothing changed: give a super short update like "Still the same" or "Yeah same spot, nothing new" or just mention one tiny new detail.
-- NEVER give the exact same description twice. Mix it up. Be natural about it.
-- Only give a full description when the scene actually changes significantly.`;
+Scene Memory:
+- You may be given what you said last time. If the scene barely changed, mention something you didn't say before or a small new detail.
+- NEVER say "nothing new" or "same as before" — there's always something to describe.
+- Don't repeat the exact same sentence. Rephrase or highlight different objects.
 
- const READER_PROMPT = `You're reading text out loud for a blind friend. Be natural — like you're just telling them what it says.
- 
- Respond in JSON:
-{
-   "text_content": "Read all visible text naturally. Signs, labels, screens, books — in logical order.",
-   "description": "Quick context like 'Looks like a menu' or 'There's a sign on the wall'",
-  "hazards": [],
-  "priority": 1
-}
+CRITICAL: Output ONLY the JSON object. No markdown, no backticks, no extra words.`;
 
- How to read:
- - Quick context first: "This says..." or "Looks like a label, it reads..."
- - Read naturally: "twelve bucks" not "$12.00"
- - Dates: "March 15th" not "03/15"
- - No text? Just say "No text here, just [quick scene]"`;
+const READER_PROMPT = `You're reading text out loud for a blind friend. Be natural — like you're just telling them what it says.
+
+You MUST respond with ONLY valid JSON — no extra text before or after:
+{"text_content":"Read all visible text naturally. Signs, labels, screens, books — in logical order.","description":"Quick context like 'Looks like a menu' or 'There's a sign on the wall'","hazards":[],"priority":1}
+
+How to read:
+- Quick context first: "This says..." or "Looks like a label, it reads..."
+- Read naturally: "twelve bucks" not "$12.00"
+- Dates: "March 15th" not "03/15"
+- No text? Just say "No text here, just [quick scene]"
+
+CRITICAL: Output ONLY the JSON object. No markdown, no backticks, no extra words.`;
 
  serve(async (req) => {
    // Handle CORS preflight
@@ -138,24 +132,52 @@ CRITICAL — Scene Memory Rules:
      const data = await response.json();
      console.log("Groq response received");
  
-     const content = data.choices?.[0]?.message?.content || "";
-     
-     // Parse JSON from response
-    let result = { text_content: "", description: content, hazards: [], priority: 5 };
-     try {
-       const jsonMatch = content.match(/\{[\s\S]*\}/);
-       if (jsonMatch) {
-         const parsed = JSON.parse(jsonMatch[0]);
-         result = {
-          text_content: parsed.text_content || "",
-           description: parsed.description || content,
-           hazards: parsed.hazards || [],
-           priority: Math.min(10, Math.max(1, parsed.priority || 5)),
-         };
-       }
-     } catch (parseError) {
-       console.warn("Could not parse JSON from response, using raw content");
-     }
+      let content = data.choices?.[0]?.message?.content || "";
+      
+      // Strip Llama model artifacts that corrupt JSON (e.g. <|end_header_id|>, <|eot_id|>)
+      content = content.replace(/<\|[^|]*\|>/g, "").replace(/\bassistant\b/g, "");
+      
+      // Parse JSON from response with multiple fallback strategies
+      let result = { text_content: "", description: "", hazards: [] as string[], priority: 5 };
+      let parsed = false;
+      
+      try {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          // Clean the matched JSON — remove control chars, fix common issues
+          let jsonStr = jsonMatch[0]
+            .replace(/[\x00-\x1F\x7F]/g, " ")  // strip control characters
+            .replace(/,\s*}/g, "}")              // trailing commas
+            .replace(/,\s*]/g, "]");             // trailing commas in arrays
+          
+          const p = JSON.parse(jsonStr);
+          result = {
+            text_content: p.text_content || "",
+            description: p.description || "",
+            hazards: Array.isArray(p.hazards) ? p.hazards : [],
+            priority: Math.min(10, Math.max(1, Number(p.priority) || 5)),
+          };
+          parsed = true;
+        }
+      } catch (parseError) {
+        console.warn("JSON.parse failed, trying regex extraction:", parseError);
+      }
+      
+      // Fallback: extract description via regex if JSON parse failed
+      if (!parsed || !result.description) {
+        const descMatch = content.match(/"description"\s*:\s*"([^"]+)"/);
+        if (descMatch) {
+          result.description = descMatch[1];
+        } else {
+          // Last resort: strip all JSON-like syntax and use cleaned content
+          result.description = content
+            .replace(/[{}":\[\]]/g, "")
+            .replace(/text_content|description|hazards|priority/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 200) || "I'm having trouble seeing right now, one sec.";
+        }
+      }
  
      return new Response(
        JSON.stringify(result),

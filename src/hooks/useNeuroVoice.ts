@@ -66,28 +66,23 @@ export const useNeuroVoice = () => {
   const isLoadingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const safetyTimerRef = useRef<number | null>(null);
+  // Mutex: prevents ANY new speak() from starting until previous one fully cleans up
+  const speakingLockRef = useRef(false);
 
   const fireOnEnd = useCallback(() => {
     if (safetyTimerRef.current) {
       window.clearTimeout(safetyTimerRef.current);
       safetyTimerRef.current = null;
     }
-    if (onEndCallbackRef.current) {
-      const cb = onEndCallbackRef.current;
-      onEndCallbackRef.current = null;
-      cb();
-    }
+    const cb = onEndCallbackRef.current;
+    onEndCallbackRef.current = null;
     isLoadingRef.current = false;
+    speakingLockRef.current = false;
+    if (cb) cb();
   }, []);
 
-  const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
-    // If there's nothing to say, don't stall smart-loop callers waiting for onend.
-    if (!text || !text.trim()) {
-      if (options.onEnd) options.onEnd();
-      return;
-    }
-
-    // Cancel any ongoing speech/request
+  // Full cleanup of any current audio — returns true if something was stopped
+  const cleanupCurrentAudio = useCallback(() => {
     if (safetyTimerRef.current) {
       window.clearTimeout(safetyTimerRef.current);
       safetyTimerRef.current = null;
@@ -95,16 +90,27 @@ export const useNeuroVoice = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    // CRITICAL: Clear old callback BEFORE stopping, so the `onended` event
-    // fired by stop() doesn't trigger the stale callback (causes double voice).
+    // CRITICAL: Clear callback BEFORE stopping to prevent stale onended
     onEndCallbackRef.current = null;
-    // Remove handler before stopping to prevent stale onended firing
     if (currentSourceRef.current) {
       currentSourceRef.current.onended = null;
       try { currentSourceRef.current.stop(); } catch {}
       currentSourceRef.current = null;
     }
     window.speechSynthesis?.cancel();
+    isLoadingRef.current = false;
+    speakingLockRef.current = false;
+  }, []);
+
+  const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
+    if (!text || !text.trim()) {
+      if (options.onEnd) options.onEnd();
+      return;
+    }
+
+    // Acquire speaking lock — prevents double voice
+    cleanupCurrentAudio();
+    speakingLockRef.current = true;
 
     onEndCallbackRef.current = options.onEnd || null;
     isLoadingRef.current = true;
@@ -218,26 +224,12 @@ export const useNeuroVoice = () => {
   }, [fireOnEnd]);
 
   const stop = useCallback(() => {
-    if (safetyTimerRef.current) {
-      window.clearTimeout(safetyTimerRef.current);
-      safetyTimerRef.current = null;
-    }
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    // Clear callback + handler BEFORE stopping to prevent stale onended
-    onEndCallbackRef.current = null;
-    if (currentSourceRef.current) {
-      currentSourceRef.current.onended = null;
-      try { currentSourceRef.current.stop(); } catch {}
-      currentSourceRef.current = null;
-    }
-    window.speechSynthesis?.cancel();
-    isLoadingRef.current = false;
-  }, []);
+    cleanupCurrentAudio();
+  }, [cleanupCurrentAudio]);
 
   const isSpeaking = useCallback(() => {
+    // Use the lock as the primary indicator — most reliable
+    if (speakingLockRef.current) return true;
     if (currentSourceRef.current) return true;
     return window.speechSynthesis?.speaking ?? false;
   }, []);

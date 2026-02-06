@@ -1,27 +1,49 @@
- import { AnimatePresence, motion } from "framer-motion";
- import { useState, useEffect, useRef } from "react";
- 
- interface CaptionDisplayProps {
-   text: string;
+import { AnimatePresence, motion } from "framer-motion";
+import { useRef } from "react";
+
+interface CaptionDisplayProps {
+  text: string;
   textContent?: string;
-   isVisible: boolean;
-   priority?: number;
+  isVisible: boolean;
+  priority?: number;
   mode?: "general" | "reader";
- }
- 
- export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general" }: CaptionDisplayProps) => {
-   // Use a unique key for crossfade based on content
-   const contentKeyRef = useRef(0);
-   const prevTextRef = useRef(text);
- 
-   // Only increment key when text actually changes (not on every render)
-   if (text !== prevTextRef.current && text) {
-     contentKeyRef.current += 1;
-     prevTextRef.current = text;
-   }
- 
-   const hasTranscribedText = textContent && textContent.length > 0;
-   const hasDescription = text && text.length > 0;
+}
+
+// Safety: if the AI returns raw JSON instead of a clean description, extract it
+function sanitizeCaption(raw: string): string {
+  if (!raw) return "";
+  // If it looks like JSON, try to extract the description field
+  if (raw.trim().startsWith("{") || raw.includes('"description"')) {
+    try {
+      const cleaned = raw.replace(/<\|[^|]*\|>/g, "").replace(/\bassistant\b/g, "");
+      const match = cleaned.match(/"description"\s*:\s*"([^"]+)"/);
+      if (match) return match[1];
+    } catch {}
+    // Strip JSON artifacts as fallback
+    return raw
+      .replace(/[{}":\[\]]/g, "")
+      .replace(/text_content|description|hazards|priority|\d+/g, "")
+      .replace(/<\|[^|]*\|>/g, "")
+      .replace(/\bassistant\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  return raw;
+}
+
+export const CaptionDisplay = ({ text, textContent, isVisible, priority = 0, mode = "general" }: CaptionDisplayProps) => {
+  const contentKeyRef = useRef(0);
+  const prevTextRef = useRef(text);
+
+  const cleanText = sanitizeCaption(text);
+
+  if (cleanText !== prevTextRef.current && cleanText) {
+    contentKeyRef.current += 1;
+    prevTextRef.current = cleanText;
+  }
+
+  const hasTranscribedText = textContent && textContent.length > 0;
+  const hasDescription = cleanText && cleanText.length > 0;
  
    return (
      <AnimatePresence>
@@ -53,9 +75,9 @@
                          ? "text-ios-red drop-shadow-[0_0_8px_hsl(var(--ios-red)/0.5)]" 
                          : "text-white/95"
                      }`}
-                   >
-                     {text}
-                   </motion.p>
+                    >
+                      {cleanText}
+                    </motion.p>
                  </AnimatePresence>
                )}
                
