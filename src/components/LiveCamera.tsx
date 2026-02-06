@@ -88,14 +88,14 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   const flipCamera = useCallback(async () => {
     if (isFlipping) return;
     setIsFlipping(true);
-    const video = webcamRef.current?.video;
-    if (video && video.srcObject) {
-      (video.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-    }
+    // Don't manually stop tracks — iOS Safari doesn't reliably release
+    // the camera if you kill the stream before the new getUserMedia call.
+    // Just change facingMode + key to force a clean Webcam remount.
     setFacingMode(prev => prev === "user" ? "environment" : "user");
     setCameraKey(prev => prev + 1);
     setCameraError(null);
-    setTimeout(() => setIsFlipping(false), 500);
+    // iOS needs extra time to release the old camera and initialize the new one
+    setTimeout(() => setIsFlipping(false), 1500);
   }, [isFlipping]);
 
   const handleCameraError = useCallback((err: string | DOMException) => {
