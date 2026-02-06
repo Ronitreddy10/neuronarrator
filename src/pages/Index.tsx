@@ -34,7 +34,7 @@ const Index = () => {
   const [cameraEnabled, setCameraEnabled] = useState(false);
   const isAnalyzingRef = useRef(false);
   const isActiveRef = useRef(false);
-  const loopFallbackTimerRef = useRef<number | null>(null);
+  const speechStartedAtRef = useRef<number>(0);
   const watchdogTimerRef = useRef<number | null>(null);
   const cameraRef = useRef<LiveCameraRef>(null);
   const lastDescriptionRef = useRef<string>("");
@@ -111,27 +111,24 @@ const Index = () => {
     enabled: isAutoCapturing,
   });
 
-  // Kick the next capture — used by speech end AND watchdog
+  // Kick the next capture — sole trigger for the speech→capture loop
   const triggerNextCapture = useCallback(() => {
-    if (loopFallbackTimerRef.current) {
-      window.clearTimeout(loopFallbackTimerRef.current);
-      loopFallbackTimerRef.current = null;
-    }
-    if (isActiveRef.current) {
+    speechStartedAtRef.current = 0;
+    if (isActiveRef.current && !isSpeaking()) {
       setTimeout(() => {
-        if (isActiveRef.current) {
+        if (isActiveRef.current && !isAnalyzingRef.current) {
           setCaptureRequestId(prev => prev + 1);
         }
       }, 300);
     }
-  }, []);
+  }, [isSpeaking]);
 
   // Called when speech finishes — triggers next capture
   const onSpeechEnd = useCallback(() => {
     triggerNextCapture();
   }, [triggerNextCapture]);
 
-  // Watchdog: if nothing has happened for 10s, force a new capture
+  // Watchdog: if nothing has happened for 8s, force a new capture
   // This catches ALL failure modes: TTS silent fail, network timeout, etc.
   useEffect(() => {
     if (!isAutoCapturing) {
@@ -143,12 +140,20 @@ const Index = () => {
     }
 
     watchdogTimerRef.current = window.setInterval(() => {
-      // Only force capture if nothing is playing or analyzing — respect smooth transitions
       if (isActiveRef.current && !isAnalyzingRef.current && !isSpeaking()) {
         console.log("Watchdog: forcing next capture (loop may have stalled)");
         setCaptureRequestId(prev => prev + 1);
+      } else if (isActiveRef.current && isSpeaking() && speechStartedAtRef.current > 0) {
+        // If speech has been going on for more than 12s, something is stuck — force next
+        const elapsed = Date.now() - speechStartedAtRef.current;
+        if (elapsed > 12000) {
+          console.warn("Watchdog: speech stuck for 12s+, forcing stop & next capture");
+          stop();
+          speechStartedAtRef.current = 0;
+          setCaptureRequestId(prev => prev + 1);
+        }
       }
-    }, 10000);
+    }, 8000);
 
     return () => {
       if (watchdogTimerRef.current) {
@@ -156,7 +161,7 @@ const Index = () => {
         watchdogTimerRef.current = null;
       }
     };
-  }, [isAutoCapturing]);
+  }, [isAutoCapturing, isSpeaking, stop]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     // Prevent concurrent requests
@@ -210,22 +215,16 @@ const Index = () => {
         setShowWarning(true);
         sosPattern();
         playHazardSound(result.priority);
+        speechStartedAtRef.current = Date.now();
         speak(`Warning! ${result.description}`, 10, { onEnd: onSpeechEnd });
-        // Safety fallback — 8s max (was 20s, way too slow on mobile)
-        loopFallbackTimerRef.current = window.setTimeout(() => {
-          triggerNextCapture();
-        }, 8000);
         const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
         playHapticMessage(hazardWord);
       } else {
         setAnalysisState("success");
         setShowWarning(false);
         playHazardSound(result.priority);
+        speechStartedAtRef.current = Date.now();
         speak(speechText, 5, { onEnd: onSpeechEnd });
-        // Safety fallback — 8s max
-        loopFallbackTimerRef.current = window.setTimeout(() => {
-          triggerNextCapture();
-        }, 8000);
       }
     } catch (error) {
       console.error("Analysis error:", error);
@@ -233,11 +232,8 @@ const Index = () => {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
       setCaptionText(errorMsg);
       setTextContent("");
-      // Don't wait for error speech — just trigger next capture quickly
-      speak("Hmm, something went wrong. Retrying.", 5, {});
-      loopFallbackTimerRef.current = window.setTimeout(() => {
-        triggerNextCapture();
-      }, 3000);
+      // Use onEnd so the loop restarts naturally even after errors
+      speak("Hmm, something went wrong. Retrying.", 5, { onEnd: onSpeechEnd });
     } finally {
       isAnalyzingRef.current = false;
     }
@@ -248,10 +244,7 @@ const Index = () => {
       setIsAutoCapturing(false);
       isActiveRef.current = false;
       captureCountRef.current = 0;
-      if (loopFallbackTimerRef.current) {
-        window.clearTimeout(loopFallbackTimerRef.current);
-        loopFallbackTimerRef.current = null;
-      }
+      speechStartedAtRef.current = 0;
       setAnalysisState("idle");
       setCaptionText("");
       setTextContent("");

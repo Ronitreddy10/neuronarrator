@@ -108,7 +108,9 @@ export const useNeuroVoice = () => {
 
     onEndCallbackRef.current = options.onEnd || null;
     isLoadingRef.current = true;
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const signal = controller.signal;
 
     try {
       const { data, error } = await supabase.functions.invoke('text-to-speech', {
@@ -118,8 +120,8 @@ export const useNeuroVoice = () => {
         },
       });
 
-      // Check if aborted
-      if (abortControllerRef.current?.signal.aborted) return;
+      // Check if THIS request was aborted (not the current controller — it may be a new one)
+      if (signal.aborted) return;
 
       if (error) {
         console.error("TTS edge function error:", error);
@@ -155,7 +157,7 @@ export const useNeuroVoice = () => {
       const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
 
       // Check again if aborted during decode
-      if (abortControllerRef.current?.signal.aborted) return;
+      if (signal.aborted) return;
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
@@ -181,7 +183,7 @@ export const useNeuroVoice = () => {
 
     } catch (err) {
       // Check if aborted - don't fallback if intentionally cancelled
-      if (abortControllerRef.current?.signal.aborted) return;
+      if (signal.aborted) return;
 
       console.error("Sarvam TTS failed, falling back to browser TTS:", err);
 
