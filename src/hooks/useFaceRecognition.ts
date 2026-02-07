@@ -5,18 +5,27 @@ import { faceDB, type FaceRecord, type RelationType } from '@/lib/faceDatabase';
 // Model CDN URL
 const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
 
-// Match threshold - lower = stricter matching
-const MATCH_THRESHOLD = 0.6;
+// Detection options — lower minConfidence to catch more faces (default is 0.5)
+const DETECTION_OPTIONS = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 });
+
+// Min detection score to proceed with matching (reject garbage detections)
+const MIN_DETECTION_SCORE = 0.4;
+
+// Match threshold — slightly relaxed for mobile camera conditions
+const MATCH_THRESHOLD = 0.55;
+
+// Descriptor blending: how much weight to give a new observation when updating stored descriptors
+const BLEND_ALPHA = 0.3;
 
 // Time thresholds for contextual announcements
-const DAYS_THRESHOLD = 3; // Days before mentioning "haven't seen in X days"
+const DAYS_THRESHOLD = 3;
 
 export interface FaceContext {
   name: string;
   relation: RelationType;
   lastSeen: Date;
   daysSinceLastSeen: number;
-  isLongAbsence: boolean; // > 3 days
+  isLongAbsence: boolean;
 }
 
 export interface FaceMatch {
@@ -25,7 +34,6 @@ export interface FaceMatch {
   descriptor?: Float32Array;
   distance?: number;
   id?: number;
-  // Extended context for known faces
   context?: FaceContext;
 }
 
@@ -46,10 +54,29 @@ export interface UseFaceRecognitionReturn {
   generateSpeechText: (match: FaceMatch) => string;
 }
 
+/**
+ * Safely reconstruct a Float32Array from whatever IndexedDB stored.
+ * Dexie may give us a Float32Array, a plain object with numeric keys, or a regular array.
+ */
+function toFloat32Array(data: unknown): Float32Array | null {
+  if (data instanceof Float32Array) return data;
+  if (data instanceof ArrayBuffer) return new Float32Array(data);
+  if (Array.isArray(data)) return new Float32Array(data);
+  if (data && typeof data === 'object') {
+    // Plain object with numeric keys from JSON round-trip
+    const values = Object.keys(data)
+      .sort((a, b) => Number(a) - Number(b))
+      .map(k => Number((data as Record<string, unknown>)[k]));
+    if (values.length === 128 && values.every(v => !isNaN(v))) {
+      return new Float32Array(values);
+    }
+  }
+  return null;
+}
+
 // Calculate Euclidean distance between two descriptors
 function euclideanDistance(desc1: Float32Array, desc2: Float32Array): number {
   if (desc1.length !== desc2.length) return Infinity;
-  
   let sum = 0;
   for (let i = 0; i < desc1.length; i++) {
     const diff = desc1[i] - desc2[i];
@@ -58,28 +85,29 @@ function euclideanDistance(desc1: Float32Array, desc2: Float32Array): number {
   return Math.sqrt(sum);
 }
 
-// Calculate days between two dates
+// Blend two descriptors: result = (1-alpha)*existing + alpha*new
+function blendDescriptors(existing: Float32Array, fresh: Float32Array, alpha: number): Float32Array {
+  const blended = new Float32Array(existing.length);
+  for (let i = 0; i < existing.length; i++) {
+    blended[i] = (1 - alpha) * existing[i] + alpha * fresh[i];
+  }
+  return blended;
+}
+
 function daysBetween(date1: Date, date2: Date): number {
   const diffTime = Math.abs(date2.getTime() - date1.getTime());
   return Math.floor(diffTime / (1000 * 60 * 60 * 24));
 }
 
-// Format relation for speech (possessive form)
 function formatRelationForSpeech(relation: RelationType): string {
   switch (relation) {
-    case 'Family':
-      return 'your family member';
-    case 'Friend':
-      return 'your friend';
-    case 'Doctor':
-      return 'your doctor';
-    case 'Colleague':
-      return 'your colleague';
-    case 'Stranger':
-      return 'a stranger';
+    case 'Family': return 'your family member';
+    case 'Friend': return 'your friend';
+    case 'Doctor': return 'your doctor';
+    case 'Colleague': return 'your colleague';
+    case 'Stranger': return 'a stranger';
     case 'Acquaintance':
-    default:
-      return 'your acquaintance';
+    default: return 'your acquaintance';
   }
 }
 
@@ -95,23 +123,21 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
   const storedFacesRef = useRef<FaceRecord[]>([]);
   const isProcessingRef = useRef(false);
 
-  // Load face count on mount
   useEffect(() => {
     refreshStoredFaces();
   }, []);
 
-  // Refresh stored faces from database
   const refreshStoredFaces = useCallback(async () => {
     try {
       const faces = await faceDB.getAllFaces();
       storedFacesRef.current = faces;
       setStoredFacesCount(faces.length);
     } catch (error) {
-      console.error('Error loading stored faces:', error);
+      console.error('[Face] Error loading stored faces:', error);
     }
   }, []);
 
-  // Load face-api.js models with retry logic for mobile
+  // Load models sequentially with retry
   const loadModels = useCallback(async () => {
     if (isModelsLoaded || isLoadingModels) return;
 
@@ -123,101 +149,90 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        console.log(`Loading face recognition models (attempt ${attempt}/${maxRetries}) from:`, MODEL_URL);
-
-        // Load models sequentially on mobile to avoid memory issues
+        console.log(`[Face] Loading models (attempt ${attempt}/${maxRetries})`);
         await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
-        console.log('SSD MobileNet loaded');
-        
         await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-        console.log('Face Landmark model loaded');
-        
         await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-        console.log('Face Recognition model loaded');
-
-        console.log('All face recognition models loaded successfully');
+        console.log('[Face] All models loaded successfully');
         setIsModelsLoaded(true);
         setIsLoadingModels(false);
         setModelLoadError(null);
-        
-        // Load stored faces after models are ready
         await refreshStoredFaces();
-        return; // Success - exit the retry loop
+        return;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('Failed to load models');
-        console.error(`Model loading attempt ${attempt} failed:`, error);
-        
+        console.error(`[Face] Model loading attempt ${attempt} failed:`, error);
         if (attempt < maxRetries) {
-          // Wait before retry (exponential backoff)
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         }
       }
     }
 
-    // All retries failed
-    const errorMsg = lastError?.message || 'Failed to load face recognition models';
-    console.error('All model loading attempts failed:', errorMsg);
-    setModelLoadError(`${errorMsg}. Check your internet connection and try again.`);
+    setModelLoadError(`${lastError?.message || 'Failed to load models'}. Check your internet connection.`);
     setIsLoadingModels(false);
   }, [isModelsLoaded, isLoadingModels, refreshStoredFaces]);
 
-  // Generate contextual speech text for a match
   const generateSpeechText = useCallback((match: FaceMatch): string => {
-    if (!match.known) {
-      // Unknown person - stay silent or subtle announcement
-      return 'An unknown person is present.';
-    }
-
-    if (!match.context) {
-      // Fallback if no context
-      return `${match.name} is here.`;
-    }
+    if (!match.known) return 'An unknown person is present.';
+    if (!match.context) return `${match.name} is here.`;
 
     const { name, relation, daysSinceLastSeen, isLongAbsence } = match.context;
     const relationText = formatRelationForSpeech(relation);
 
     if (isLongAbsence) {
-      // Time-aware announcement
       return `${name}, ${relationText}. You haven't seen them in ${daysSinceLastSeen} days.`;
-    } else {
-      // Standard announcement
-      return `${name}, ${relationText}, is here.`;
     }
+    return `${name}, ${relationText}, is here.`;
   }, []);
 
-  // Detect face and match against stored faces
+  // Main detection and matching pipeline
   const detectAndMatch = useCallback(async (videoElement: HTMLVideoElement): Promise<FaceMatch | null> => {
     if (!isModelsLoaded) {
-      console.warn('Models not loaded yet');
+      console.warn('[Face] Models not loaded yet');
       return null;
     }
 
-    if (isProcessingRef.current) {
-      return null;
-    }
-
+    if (isProcessingRef.current) return null;
     isProcessingRef.current = true;
     setIsProcessing(true);
 
     try {
-      // Detect single face with landmarks and descriptor
-      const detection = await faceapi
-        .detectSingleFace(videoElement)
+      // Use detectAllFaces with lowered confidence, pick the largest/best face
+      const detections = await faceapi
+        .detectAllFaces(videoElement, DETECTION_OPTIONS)
         .withFaceLandmarks()
-        .withFaceDescriptor();
+        .withFaceDescriptors();
 
-      if (!detection) {
+      if (!detections || detections.length === 0) {
+        console.log('[Face] No faces detected');
         setLastMatch(null);
         return null;
       }
 
-      const currentDescriptor = new Float32Array(detection.descriptor);
-      
+      // Pick the detection with the highest score (most confident)
+      let bestDetection = detections[0];
+      for (let i = 1; i < detections.length; i++) {
+        if (detections[i].detection.score > bestDetection.detection.score) {
+          bestDetection = detections[i];
+        }
+      }
+
+      const score = bestDetection.detection.score;
+      console.log(`[Face] Best detection score: ${score.toFixed(3)} (min: ${MIN_DETECTION_SCORE})`);
+
+      // Reject low-confidence detections
+      if (score < MIN_DETECTION_SCORE) {
+        console.log('[Face] Detection score too low, skipping match');
+        setLastMatch(null);
+        return null;
+      }
+
+      const currentDescriptor = new Float32Array(bestDetection.descriptor);
+
       // Fetch latest faces from database
       const storedFaces = storedFacesRef.current;
 
       if (storedFaces.length === 0) {
-        // No stored faces - this is an unknown person
         const unknownMatch: FaceMatch = {
           name: 'Unknown',
           known: false,
@@ -228,65 +243,73 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
         return unknownMatch;
       }
 
-      // Find best match
-      let bestMatch: FaceRecord | null = null;
+      // Find best match across all stored faces
+      let bestMatchRecord: FaceRecord | null = null;
       let bestDistance = Infinity;
 
       for (const face of storedFaces) {
-        // Convert stored descriptor back to Float32Array if needed
-        const storedDescriptor = face.descriptor instanceof Float32Array 
-          ? face.descriptor 
-          : new Float32Array(Object.values(face.descriptor));
-        
+        const storedDescriptor = toFloat32Array(face.descriptor);
+        if (!storedDescriptor) {
+          console.warn(`[Face] Skipping face ${face.name} — invalid descriptor`);
+          continue;
+        }
+
         const distance = euclideanDistance(currentDescriptor, storedDescriptor);
-        
+
         if (distance < bestDistance) {
           bestDistance = distance;
-          bestMatch = face;
+          bestMatchRecord = face;
         }
       }
 
-      if (bestMatch && bestDistance < MATCH_THRESHOLD) {
+      console.log(`[Face] Best match: ${bestMatchRecord?.name || 'none'}, distance: ${bestDistance.toFixed(4)}, threshold: ${MATCH_THRESHOLD}`);
+
+      if (bestMatchRecord && bestDistance < MATCH_THRESHOLD) {
         // Calculate temporal context
         const now = new Date();
-        const lastSeen = bestMatch.lastSeen instanceof Date 
-          ? bestMatch.lastSeen 
-          : new Date(bestMatch.lastSeen);
+        const lastSeen = bestMatchRecord.lastSeen instanceof Date
+          ? bestMatchRecord.lastSeen
+          : new Date(bestMatchRecord.lastSeen);
         const daysSinceLastSeen = daysBetween(lastSeen, now);
-        
-        // Create context object
+
         const context: FaceContext = {
-          name: bestMatch.name,
-          relation: bestMatch.relation || 'Acquaintance',
+          name: bestMatchRecord.name,
+          relation: bestMatchRecord.relation || 'Acquaintance',
           lastSeen,
           daysSinceLastSeen,
           isLongAbsence: daysSinceLastSeen >= DAYS_THRESHOLD
         };
 
-        // Update lastSeen in database (async, don't block)
-        if (bestMatch.id) {
-          faceDB.updateLastSeen(bestMatch.id).catch(err => 
-            console.error('Failed to update lastSeen:', err)
-          );
+        // Update lastSeen AND blend descriptors for adaptive matching
+        if (bestMatchRecord.id) {
+          const storedDesc = toFloat32Array(bestMatchRecord.descriptor);
+          if (storedDesc) {
+            const blended = blendDescriptors(storedDesc, currentDescriptor, BLEND_ALPHA);
+            faceDB.updateFaceDescriptorAndLastSeen(bestMatchRecord.id, blended).catch(err =>
+              console.error('[Face] Failed to update descriptor:', err)
+            );
+          } else {
+            faceDB.updateLastSeen(bestMatchRecord.id).catch(err =>
+              console.error('[Face] Failed to update lastSeen:', err)
+            );
+          }
         }
 
-        // Known face matched with full context
         const knownMatch: FaceMatch = {
-          name: bestMatch.name,
+          name: bestMatchRecord.name,
           known: true,
           distance: bestDistance,
-          id: bestMatch.id,
+          id: bestMatchRecord.id,
           context
         };
         setLastMatch(knownMatch);
         setLastUnknownDescriptor(null);
-        
-        // Also refresh stored faces to get updated lastSeen for next cycle
+
+        // Refresh faces so blended descriptor is available next cycle
         refreshStoredFaces();
-        
+
         return knownMatch;
       } else {
-        // Unknown face (no match or distance too high)
         const unknownMatch: FaceMatch = {
           name: 'Unknown',
           known: false,
@@ -298,7 +321,7 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
         return unknownMatch;
       }
     } catch (error) {
-      console.error('Face detection error:', error);
+      console.error('[Face] Detection error:', error);
       return null;
     } finally {
       isProcessingRef.current = false;
@@ -306,19 +329,19 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
     }
   }, [isModelsLoaded, refreshStoredFaces]);
 
-  // Register the current unknown face with name and relationship
+  // Register the current unknown face
   const registerCurrentFace = useCallback(async (name: string, relation: RelationType): Promise<boolean> => {
     if (!lastUnknownDescriptor) {
-      console.warn('No unknown face to register');
+      console.warn('[Face] No unknown face to register');
       return false;
     }
 
     try {
+      // Store as a plain Array for reliable IndexedDB serialization
       await faceDB.addFace(name.trim(), lastUnknownDescriptor, relation);
       await refreshStoredFaces();
       setLastUnknownDescriptor(null);
-      
-      // Update lastMatch to reflect the newly registered face with context
+
       const now = new Date();
       setLastMatch({
         name: name.trim(),
@@ -332,15 +355,14 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
         }
       });
 
-      console.log(`Face registered as: ${name} (${relation})`);
+      console.log(`[Face] Registered: ${name} (${relation})`);
       return true;
     } catch (error) {
-      console.error('Error registering face:', error);
+      console.error('[Face] Error registering face:', error);
       return false;
     }
   }, [lastUnknownDescriptor, refreshStoredFaces]);
 
-  // Clear all stored faces
   const clearAllFaces = useCallback(async () => {
     try {
       await faceDB.clearAllFaces();
@@ -348,15 +370,13 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       setLastMatch(null);
       setLastUnknownDescriptor(null);
     } catch (error) {
-      console.error('Error clearing faces:', error);
+      console.error('[Face] Error clearing faces:', error);
     }
   }, [refreshStoredFaces]);
 
-  // Force retry loading models (resets error state first)
   const retryLoadModels = useCallback(async () => {
     setModelLoadError(null);
     setIsLoadingModels(false);
-    // Small delay to reset state
     await new Promise(resolve => setTimeout(resolve, 100));
     await loadModels();
   }, [loadModels]);
