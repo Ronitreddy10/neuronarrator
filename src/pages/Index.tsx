@@ -74,19 +74,36 @@ const Index = () => {
     }
   }, [isAutoCapturing, loadModels]);
 
-  // Voice command handler — truly hands-free: runs face detection RIGHT NOW
+  // Voice command handler — truly hands-free
   const handleVoiceRemember = useCallback(async (name: string) => {
+    console.log("[VoiceRemember] Command received for:", name);
+
+    // FIRST: check if we already have an unknown face descriptor from the capture loop
+    // This avoids a race condition with detectAndMatch's isProcessingRef guard
+    if (lastUnknownDescriptor) {
+      console.log("[VoiceRemember] Using existing unknown descriptor");
+      // Clear the unknown face pause so TTS resumes after registration
+      unknownFacePauseUntilRef.current = 0;
+      const success = await registerCurrentFace(name, "Friend");
+      if (success) {
+        speak(`Got it, I'll remember ${name}.`, 5, {});
+      } else {
+        speak(`Couldn't save that face. Try again.`, 5, {});
+      }
+      return;
+    }
+
+    // FALLBACK: No cached descriptor — try detecting right now
     const video = cameraRef.current?.getVideoElement();
     if (!video || video.readyState < 2 || !isModelsLoaded) {
       speak("I can't see anyone right now. Make sure the camera is on.", 5, {});
       return;
     }
 
-    // Run face detection IMMEDIATELY — don't rely on stale state
+    console.log("[VoiceRemember] No cached descriptor, running fresh detection...");
     const match = await detectAndMatch(video);
     
     if (!match || match.known) {
-      // Either no face detected or already known
       if (match?.known) {
         speak(`I already know ${match.name}. No need to save again.`, 5, {});
       } else {
@@ -96,13 +113,14 @@ const Index = () => {
     }
 
     // We have an unknown face — register it
+    unknownFacePauseUntilRef.current = 0;
     const success = await registerCurrentFace(name, "Friend");
     if (success) {
       speak(`Got it, I'll remember ${name}.`, 5, {});
     } else {
       speak(`Couldn't save that face. Try again.`, 5, {});
     }
-  }, [isModelsLoaded, detectAndMatch, registerCurrentFace, speak]);
+  }, [isModelsLoaded, detectAndMatch, registerCurrentFace, speak, lastUnknownDescriptor]);
 
   const handleVoiceClear = useCallback(() => {
     clearAllFaces();

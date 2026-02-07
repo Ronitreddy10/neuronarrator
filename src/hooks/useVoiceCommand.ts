@@ -95,7 +95,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = false; // Only final results — less noise, more reliable
+    recognition.interimResults = true; // Needed to keep session alive on mobile
     recognition.lang = "en-IN";
     recognition.maxAlternatives = 5; // More alternatives = better chance of catching the phrase
 
