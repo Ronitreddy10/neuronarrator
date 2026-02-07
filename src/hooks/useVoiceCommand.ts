@@ -52,13 +52,34 @@ const CLEAR_PATTERNS = [
   "neural clear all",
 ];
 
+// Mode switching patterns for always-on detection
+const MODE_CURRENCY_PATTERNS = [
+  "neuro currency", "neural currency", "nero currency",
+  "neuro count notes", "neural count notes",
+  "neuro money", "neural money", "nero money",
+  "count notes", "count my notes", "count money",
+];
+
+const MODE_FINDER_PATTERNS = [
+  /(?:neuro|neural|nero)\s+find\s+(?:my\s+)?(.+)/i,
+  /(?:neuro|neural|nero)\s+where\s+is\s+(?:my\s+)?(.+)/i,
+  /(?:neuro|neural|nero)\s+locate\s+(?:my\s+)?(.+)/i,
+];
+
+const MODE_STANDARD_PATTERNS = [
+  "neuro describe", "neural describe", "nero describe",
+  "neuro standard", "neural standard", "nero standard",
+  "neuro normal", "neural normal",
+];
+
 interface UseVoiceCommandOptions {
   onRememberCommand: (name: string) => void;
   onClearCommand: () => void;
+  onModeSwitch?: (mode: "standard" | "currency" | "finder", targetItem?: string) => void;
   enabled: boolean;
 }
 
-export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: UseVoiceCommandOptions) {
+export function useVoiceCommand({ onRememberCommand, onClearCommand, onModeSwitch, enabled }: UseVoiceCommandOptions) {
   const [isListening, setIsListening] = useState(false);
   const [lastCommand, setLastCommand] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
@@ -71,8 +92,10 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
   // when parent re-renders with new callback references
   const onRememberRef = useRef(onRememberCommand);
   const onClearRef = useRef(onClearCommand);
+  const onModeSwitchRef = useRef(onModeSwitch);
   useEffect(() => { onRememberRef.current = onRememberCommand; }, [onRememberCommand]);
   useEffect(() => { onClearRef.current = onClearCommand; }, [onClearCommand]);
+  useEffect(() => { onModeSwitchRef.current = onModeSwitch; }, [onModeSwitch]);
 
   const clearRestartTimeout = useCallback(() => {
     if (restartTimeoutRef.current) {
@@ -158,6 +181,43 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
               return;
             }
           }
+
+          // Check for mode switching commands (hands-free)
+          if (onModeSwitchRef.current) {
+            // Currency mode
+            for (const pattern of MODE_CURRENCY_PATTERNS) {
+              if (transcript.includes(pattern)) {
+                console.log("[VoiceCmd] ✅ CURRENCY MODE command detected");
+                setLastCommand("Currency Mode");
+                onModeSwitchRef.current("currency");
+                return;
+              }
+            }
+
+            // Finder mode (regex to extract target item)
+            for (const pattern of MODE_FINDER_PATTERNS) {
+              const match = transcript.match(pattern);
+              if (match && match[1]) {
+                const item = match[1].replace(/[.!?,;:'"]/g, "").replace(/\b(please|the|a|an)\b/gi, "").trim();
+                if (item.length >= 2) {
+                  console.log("[VoiceCmd] ✅ FINDER MODE command detected ->", item);
+                  setLastCommand(`Find: ${item}`);
+                  onModeSwitchRef.current("finder", item);
+                  return;
+                }
+              }
+            }
+
+            // Standard mode
+            for (const pattern of MODE_STANDARD_PATTERNS) {
+              if (transcript.includes(pattern)) {
+                console.log("[VoiceCmd] ✅ STANDARD MODE command detected");
+                setLastCommand("Standard Mode");
+                onModeSwitchRef.current("standard");
+                return;
+              }
+            }
+          }
         }
       }
     };
@@ -168,7 +228,15 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
         return;
       }
       consecutiveErrorsRef.current += 1;
-      console.warn("[VoiceCmd] Error:", event.error, `(consecutive: ${consecutiveErrorsRef.current})`);
+      // Stop spamming after 10 consecutive "not-allowed" errors
+      if (event.error === "not-allowed" && consecutiveErrorsRef.current >= 10) {
+        console.warn("[VoiceCmd] Mic blocked after 10 attempts — stopping until user gesture");
+        isStoppedManuallyRef.current = true;
+        return;
+      }
+      if (consecutiveErrorsRef.current <= 5) {
+        console.warn("[VoiceCmd] Error:", event.error, `(consecutive: ${consecutiveErrorsRef.current})`);
+      }
     };
 
     recognition.onend = () => {
@@ -178,8 +246,8 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
 
       // Auto-restart unless manually stopped
       if (!isStoppedManuallyRef.current && enabled) {
-        // Back off if we're getting too many consecutive errors
-        const delay = consecutiveErrorsRef.current > 3 ? 3000 : 800;
+        // Exponential backoff: 800ms, 1.5s, 3s, 5s, cap at 8s
+        const backoffMs = Math.min(8000, 800 * Math.pow(1.5, Math.min(consecutiveErrorsRef.current, 6)));
         clearRestartTimeout();
         restartTimeoutRef.current = window.setTimeout(() => {
           if (!isStoppedManuallyRef.current && enabled && !isRunningRef.current) {
@@ -188,15 +256,14 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
               recognition.start();
             } catch (err) {
               console.warn("[VoiceCmd] Restart failed:", err);
-              // Try creating a fresh instance after a delay
               restartTimeoutRef.current = window.setTimeout(() => {
                 if (!isStoppedManuallyRef.current && enabled && !isRunningRef.current) {
                   startListening();
                 }
-              }, 2000);
+              }, 3000);
             }
           }
-        }, delay);
+        }, backoffMs);
       }
     };
 

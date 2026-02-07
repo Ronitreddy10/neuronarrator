@@ -20,6 +20,7 @@ interface UseVoiceControlReturn {
   startListening: () => void;
   stopListening: () => void;
   setCommandMode: (mode: CommandMode) => void;
+  setTargetItem: (item: string) => void;
 }
 
 // Patterns for each command
@@ -53,6 +54,10 @@ function speakFeedback(text: string) {
     utterance.volume = 1.0;
     utterance.lang = "en-IN";
     window.speechSynthesis.speak(utterance);
+  }
+  // Also vibrate on mode switch for tactile confirmation
+  if ("vibrate" in navigator) {
+    try { navigator.vibrate([100, 50, 100]); } catch {}
   }
 }
 
@@ -166,14 +171,15 @@ export function useVoiceControl(): UseVoiceControlReturn {
 
           // Speak confirmation
           if (parsed.mode === "currency") {
-            speakFeedback("Currency Mode Active.");
+            speakFeedback("Currency Mode. Show me the notes.");
           } else if (parsed.mode === "finder") {
-            speakFeedback(`Searching for ${parsed.targetItem}.`);
+            speakFeedback(`Finder Mode. Looking for ${parsed.targetItem}.`);
           } else {
-            speakFeedback("Standard Mode.");
+            speakFeedback("Standard Mode. Describing scene.");
           }
         } else {
           console.log("[VoiceControl] No command recognized in:", text);
+          speakFeedback("Sorry, I didn't understand. Try saying: count notes, find keys, or describe.");
         }
       }
 
@@ -207,5 +213,6 @@ export function useVoiceControl(): UseVoiceControlReturn {
     startListening,
     stopListening,
     setCommandMode,
+    setTargetItem,
   };
 }
