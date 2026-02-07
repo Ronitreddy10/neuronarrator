@@ -20,7 +20,9 @@ Rules:
 - Distances matter: "Like 5 steps ahead there's a chair"
 - Hazards stay calm: "Heads up, stairs coming" not "WARNING: STAIRS DETECTED"
 - If you know someone's name, USE IT. Say "Ronit's right in front of you" not "A man is in front of you"
-- Keep it SHORT but COMPLETE. 1-2 sentences covering what matters.
+- If someone is a family member or friend, mention it warmly: "Hey, your friend Ronit is here!" or "It's your doctor, Dr. Shah"
+- If it's been a while since you last saw them, mention it naturally: "Oh nice, it's Ronit! You haven't seen him in like a week"
+- If you just saw them today, DON'T mention timing — just use their name naturally
 
 Scene Memory:
 - You may be given what you said last time. If the scene barely changed, mention something you didn't say before or a small new detail.
@@ -74,8 +76,19 @@ CRITICAL: Output ONLY the JSON object. No markdown, no backticks, no extra words
        : "What's in front of me?";
     
     if (knownFaces.length > 0 && mode !== "reader") {
-      const faceInfo = knownFaces.map((f: any) => `${f.name} (${f.relation})`).join(", ");
-      userPrompt += `\n\nPeople I recognize here: ${faceInfo}. Use their names naturally.`;
+      const faceLines = knownFaces.map((f: any) => {
+        let line = `${f.name} — ${f.relation}`;
+        if (f.daysSinceLastSeen !== undefined && f.daysSinceLastSeen > 0) {
+          if (f.daysSinceLastSeen === 1) line += ` (last seen yesterday)`;
+          else if (f.daysSinceLastSeen < 7) line += ` (last seen ${f.daysSinceLastSeen} days ago)`;
+          else if (f.daysSinceLastSeen < 30) line += ` (last seen about ${Math.round(f.daysSinceLastSeen / 7)} weeks ago)`;
+          else line += ` (last seen about ${Math.round(f.daysSinceLastSeen / 30)} months ago)`;
+        } else if (f.daysSinceLastSeen === 0) {
+          line += ` (seen just now / today)`;
+        }
+        return line;
+      }).join("; ");
+      userPrompt += `\n\nPeople I recognize here: ${faceLines}. Use their names naturally. Mention their relationship and when you last saw them if it's been a while (more than a day). If you just saw them today, don't mention timing.`;
     }
 
     if (previousDescription && mode !== "reader") {

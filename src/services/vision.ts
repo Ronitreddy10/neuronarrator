@@ -12,6 +12,8 @@ export type VisionMode = "general" | "reader";
 export interface KnownFaceInfo {
   name: string;
   relation: string;
+  daysSinceLastSeen?: number;
+  isLongAbsence?: boolean;
 }
 
 export async function analyzeImage(
