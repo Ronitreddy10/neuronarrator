@@ -38,7 +38,6 @@ class NeuroMemoryDatabase extends Dexie {
     this.version(2).stores({
       faces: '++id, name, relation, lastSeen, descriptor'
     }).upgrade(tx => {
-      // Migrate existing records - add default relation and lastSeen
       return tx.table('faces').toCollection().modify(face => {
         if (!face.relation) {
           face.relation = 'Acquaintance';
@@ -59,10 +58,11 @@ export const faceDB = {
   // Add a new face to the database with relationship
   async addFace(name: string, descriptor: Float32Array, relation: RelationType = 'Acquaintance'): Promise<number> {
     const now = new Date();
+    // Store descriptor as plain array for reliable IndexedDB serialization
     return await db.faces.add({
       name,
       relation,
-      descriptor,
+      descriptor: descriptor as Float32Array,
       lastSeen: now,
       createdAt: now
     });
@@ -91,6 +91,14 @@ export const faceDB = {
   // Update lastSeen timestamp
   async updateLastSeen(id: number): Promise<void> {
     await db.faces.update(id, { lastSeen: new Date() });
+  },
+
+  // Update descriptor AND lastSeen — used for adaptive descriptor blending
+  async updateFaceDescriptorAndLastSeen(id: number, descriptor: Float32Array): Promise<void> {
+    await db.faces.update(id, { 
+      descriptor: descriptor as Float32Array,
+      lastSeen: new Date() 
+    });
   },
 
   // Clear all faces
