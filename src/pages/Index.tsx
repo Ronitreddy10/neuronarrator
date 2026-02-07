@@ -188,6 +188,8 @@ const Index = () => {
               knownFaces = [{
                 name: match.context.name,
                 relation: match.context.relation,
+                daysSinceLastSeen: match.context.daysSinceLastSeen,
+                isLongAbsence: match.context.isLongAbsence,
               }];
             }
           } catch (faceErr) {
