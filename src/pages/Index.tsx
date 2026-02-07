@@ -1,22 +1,25 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { DynamicIsland } from "@/components/DynamicIsland";
 import { LiveCamera, type LiveCameraRef } from "@/components/LiveCamera";
-import { ControlDeck } from "@/components/ControlDeck";
 import { SettingsModal } from "@/components/SettingsModal";
 import { type RelationType } from "@/lib/faceDatabase";
 import { WarningBanner } from "@/components/WarningBanner";
 import { CaptionDisplay } from "@/components/CaptionDisplay";
-import { ModeToggle } from "@/components/ModeToggle";
 import { AddPersonModal } from "@/components/AddPersonModal";
 import { FaceRecognitionOverlay } from "@/components/FaceRecognitionOverlay";
 import { useNeuroVoice, unlockAudioForMobile } from "@/hooks/useNeuroVoice";
 import { useHaptics } from "@/hooks/useHaptics";
 import { useHapticBraille } from "@/hooks/useHapticBraille";
 import { useHazardSound } from "@/hooks/useHazardSound";
+import { useFinderSound } from "@/hooks/useFinderSound";
 import { useFaceRecognition } from "@/hooks/useFaceRecognition";
 import { useVoiceCommand } from "@/hooks/useVoiceCommand";
+import { useVoiceControl, type CommandMode } from "@/hooks/useVoiceControl";
 import { HapticBrailleIndicator } from "@/components/HapticBrailleIndicator";
-import { analyzeImage as analyzeImageService, VisionMode, type KnownFaceInfo } from "@/services/vision";
+import { PushToTalkOverlay } from "@/components/PushToTalkOverlay";
+import { analyzeImage as analyzeImageService, type VisionMode, type KnownFaceInfo } from "@/services/vision";
+import { Settings } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 type AnalysisState = "idle" | "analyzing" | "success" | "warning" | "error";
 
@@ -29,7 +32,6 @@ const Index = () => {
   const [textContent, setTextContent] = useState("");
   const [priority, setPriority] = useState(0);
   const [showWarning, setShowWarning] = useState(false);
-  const [mode, setMode] = useState<VisionMode>("general");
   const [captureRequestId, setCaptureRequestId] = useState(0);
   const [cameraEnabled, setCameraEnabled] = useState(false);
   const isAnalyzingRef = useRef(false);
@@ -50,7 +52,24 @@ const Index = () => {
   const { sosPattern } = useHaptics();
   const { playHapticMessage, stopHaptic, isPlaying: isHapticPlaying, currentChar, currentDots } = useHapticBraille();
   const { playHazardSound } = useHazardSound();
-  
+  const { playFoundPing, playNotFoundThrum, playListeningChime } = useFinderSound();
+
+  // Voice control for mode switching (push-to-talk)
+  const {
+    isListening: isVoiceControlListening,
+    transcript: voiceTranscript,
+    commandMode,
+    targetItem,
+    startListening: startVoiceControl,
+    stopListening: stopVoiceControl,
+    setCommandMode,
+  } = useVoiceControl();
+
+  // Map commandMode to VisionMode
+  const mode: VisionMode = commandMode === "currency" ? "currency" 
+    : commandMode === "finder" ? "finder" 
+    : "general";
+
   const {
     isModelsLoaded,
     isLoadingModels,
@@ -69,7 +88,7 @@ const Index = () => {
   // Keep ref in sync so handleVoiceRemember doesn't need lastUnknownDescriptor as a dep
   lastUnknownDescriptorRef.current = lastUnknownDescriptor;
 
-  // Load face recognition models lazily — don't block app startup on mobile
+  // Load face recognition models lazily
   const modelsLoadedOnce = useRef(false);
   useEffect(() => {
     if (isAutoCapturing && !modelsLoadedOnce.current) {
@@ -82,8 +101,6 @@ const Index = () => {
   const handleVoiceRemember = useCallback(async (name: string) => {
     console.log("[VoiceRemember] Command received for:", name);
 
-    // FIRST: check if we already have an unknown face descriptor from the capture loop
-    // Use ref to avoid recreating this callback on every face detection cycle
     if (lastUnknownDescriptorRef.current) {
       console.log("[VoiceRemember] Using existing unknown descriptor");
       unknownFacePauseUntilRef.current = 0;
@@ -96,7 +113,6 @@ const Index = () => {
       return;
     }
 
-    // FALLBACK: No cached descriptor — try detecting right now
     const video = cameraRef.current?.getVideoElement();
     if (!video || video.readyState < 2 || !isModelsLoaded) {
       speak("I can't see anyone right now. Make sure the camera is on.", 5, {});
@@ -115,7 +131,6 @@ const Index = () => {
       return;
     }
 
-    // We have an unknown face — register it
     unknownFacePauseUntilRef.current = 0;
     const success = await registerCurrentFace(name, "Friend");
     if (success) {
@@ -137,7 +152,7 @@ const Index = () => {
     enabled: isAutoCapturing,
   });
 
-  // Kick the next capture — sole trigger for the speech→capture loop
+  // Kick the next capture
   const triggerNextCapture = useCallback(() => {
     speechStartedAtRef.current = 0;
     if (isActiveRef.current && !isBusy()) {
@@ -149,13 +164,11 @@ const Index = () => {
     }
   }, [isBusy]);
 
-  // Called when speech finishes — triggers next capture
   const onSpeechEnd = useCallback(() => {
     triggerNextCapture();
   }, [triggerNextCapture]);
 
-  // Watchdog: if nothing has happened for 5s, force a new capture
-  // Also force-resets stuck analysis after 15s
+  // Watchdog
   useEffect(() => {
     if (!isAutoCapturing) {
       if (watchdogTimerRef.current) {
@@ -166,7 +179,6 @@ const Index = () => {
     }
 
     watchdogTimerRef.current = window.setInterval(() => {
-      // Force-reset stuck analysis (prevents permanent stall)
       if (isAnalyzingRef.current && analysisStartedAtRef.current > 0) {
         const analysisDuration = Date.now() - analysisStartedAtRef.current;
         if (analysisDuration > 15000) {
@@ -179,10 +191,9 @@ const Index = () => {
       }
 
       if (isActiveRef.current && !isAnalyzingRef.current && !isBusy()) {
-        console.log("Watchdog: forcing next capture (loop may have stalled)");
+        console.log("Watchdog: forcing next capture");
         setCaptureRequestId(prev => prev + 1);
       } else if (isActiveRef.current && isBusy() && speechStartedAtRef.current > 0) {
-        // If speech has been going on for more than 12s, something is stuck — force next
         const elapsed = Date.now() - speechStartedAtRef.current;
         if (elapsed > 12000) {
           console.warn("Watchdog: speech stuck for 12s+, forcing stop & next capture");
@@ -202,10 +213,7 @@ const Index = () => {
   }, [isAutoCapturing, isBusy, stop]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
-    // Prevent concurrent requests
     if (isAnalyzingRef.current) return;
-    // Smooth transition: if TTS is busy (loading or speaking), skip this frame.
-    // The current speech's onEnd will trigger the next capture naturally.
     if (isBusy()) return;
     isAnalyzingRef.current = true;
     analysisStartedAtRef.current = Date.now();
@@ -214,10 +222,10 @@ const Index = () => {
     setAnalysisState("analyzing");
 
     try {
-      // Step 1: Face detection with 2s timeout — skip gracefully on slow devices
+      // Face detection (only for general mode)
       let knownFaces: KnownFaceInfo[] = [];
       let hasUnknownFace = false;
-      if (isModelsLoaded) {
+      if (isModelsLoaded && mode === "general") {
         const video = cameraRef.current?.getVideoElement();
         if (video && video.readyState >= 2) {
           try {
@@ -241,20 +249,17 @@ const Index = () => {
         }
       }
 
-      // Unknown face detected → pause TTS for 5s so user can say "neuro remember [name]"
-      if (hasUnknownFace) {
+      // Unknown face pause (general mode only)
+      if (hasUnknownFace && mode === "general") {
         const now = Date.now();
         if (unknownFacePauseUntilRef.current === 0 || now > unknownFacePauseUntilRef.current) {
-          // Start a new pause window
           unknownFacePauseUntilRef.current = now + UNKNOWN_FACE_PAUSE_MS;
           console.log("[Loop] Unknown face detected — pausing TTS for 5s for voice registration");
-          // Stop any active TTS so the mic is clear, then force-restart voice listener
           stop();
           forceRestartVoice();
         }
 
         if (now < unknownFacePauseUntilRef.current) {
-          // We're in the pause window — skip TTS, trigger next capture after a short delay
           setAnalysisState("success");
           setCaptionText("Unknown face detected — say \"Neuro remember [name]\" to save");
           isAnalyzingRef.current = false;
@@ -266,40 +271,69 @@ const Index = () => {
           }, 1500);
           return;
         }
-      } else {
-        // Known or no face — reset the pause
+      } else if (mode === "general") {
         unknownFacePauseUntilRef.current = 0;
       }
 
-      // Step 2: Send image + face names + previous description to vision API
-      const result = await analyzeImageService(base64, mode, knownFaces, lastDescriptionRef.current);
+      // Send image to vision API with mode + targetItem
+      const result = await analyzeImageService(base64, mode, knownFaces, lastDescriptionRef.current, targetItem);
 
       setPriority(result.priority);
       setCaptionText(result.description);
       setTextContent(result.text_content);
       lastDescriptionRef.current = result.description;
 
-      // The AI description now includes face names naturally — no separate announcements needed
-      const speechText = mode === "reader" 
-        ? result.text_content || result.description
-        : result.description;
-
-      // Handle high priority hazards
-      if (result.priority > 7) {
-        setAnalysisState("warning");
-        setShowWarning(true);
-        sosPattern();
-        playHazardSound(result.priority);
-        speechStartedAtRef.current = Date.now();
-        speak(`Warning! ${result.description}`, 10, { onEnd: onSpeechEnd });
-        const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
-        playHapticMessage(hazardWord);
-      } else {
+      // Handle finder mode feedback
+      if (mode === "finder") {
+        if (result.found) {
+          playFoundPing();
+          // Also vibrate on found
+          if ("vibrate" in navigator) {
+            try { navigator.vibrate([200, 100, 200, 100, 200]); } catch {}
+          }
+          speechStartedAtRef.current = Date.now();
+          speak(result.description, 8, { onEnd: onSpeechEnd });
+        } else {
+          playNotFoundThrum();
+          // Short delay then next capture — no speech for not-found to keep scanning fast
+          setAnalysisState("success");
+          isAnalyzingRef.current = false;
+          analysisStartedAtRef.current = 0;
+          setTimeout(() => {
+            if (isActiveRef.current && !isAnalyzingRef.current) {
+              setCaptureRequestId(prev => prev + 1);
+            }
+          }, 800);
+          return;
+        }
+      }
+      // Handle currency mode
+      else if (mode === "currency") {
         setAnalysisState("success");
         setShowWarning(false);
-        playHazardSound(result.priority);
         speechStartedAtRef.current = Date.now();
-        speak(speechText, 5, { onEnd: onSpeechEnd });
+        speak(result.description, 5, { onEnd: onSpeechEnd });
+      }
+      // Handle standard/general modes
+      else {
+        const speechText = result.text_content || result.description;
+
+        if (result.priority > 7) {
+          setAnalysisState("warning");
+          setShowWarning(true);
+          sosPattern();
+          playHazardSound(result.priority);
+          speechStartedAtRef.current = Date.now();
+          speak(`Warning! ${result.description}`, 10, { onEnd: onSpeechEnd });
+          const hazardWord = result.description.split(" ").slice(0, 2).join(" ");
+          playHapticMessage(hazardWord);
+        } else {
+          setAnalysisState("success");
+          setShowWarning(false);
+          playHazardSound(result.priority);
+          speechStartedAtRef.current = Date.now();
+          speak(speechText, 5, { onEnd: onSpeechEnd });
+        }
       }
     } catch (error) {
       console.error("Analysis error:", error);
@@ -307,13 +341,12 @@ const Index = () => {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
       setCaptionText(errorMsg);
       setTextContent("");
-      // Use onEnd so the loop restarts naturally even after errors
       speak("Hmm, something went wrong. Retrying.", 5, { onEnd: onSpeechEnd });
     } finally {
       isAnalyzingRef.current = false;
       analysisStartedAtRef.current = 0;
     }
-  }, [speak, stop, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isBusy, forceRestartVoice]);
+  }, [speak, stop, sosPattern, playHapticMessage, playHazardSound, playFoundPing, playNotFoundThrum, mode, targetItem, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isBusy, forceRestartVoice]);
 
   const startStream = useCallback(() => {
     if (isAutoCapturing) return;
@@ -322,13 +355,10 @@ const Index = () => {
     isActiveRef.current = true;
     unknownFacePauseUntilRef.current = 0;
 
-    // Unlock audio for TTS (non-blocking)
     unlockAudioForMobile();
 
-    // Remember that user granted permissions — auto-start next time
     try { localStorage.setItem('neuro-autostart', 'true'); } catch {}
 
-    // Trigger first capture after camera initializes (1.5s)
     setTimeout(() => {
       if (isActiveRef.current) {
         setCaptureRequestId(1);
@@ -366,7 +396,6 @@ const Index = () => {
       const shouldAutoStart = localStorage.getItem('neuro-autostart') === 'true';
       if (shouldAutoStart) {
         console.log("[AutoStart] Previously granted permissions detected — auto-starting stream");
-        // Small delay to ensure component is fully mounted
         const timer = setTimeout(() => {
           startStream();
         }, 500);
@@ -388,17 +417,43 @@ const Index = () => {
     speak("All faces cleared from memory", 5, {});
   };
 
+  // Push-to-talk handlers
+  const handleTouchStart = useCallback(() => {
+    if (!isAutoCapturing) return;
+    playListeningChime();
+    startVoiceControl();
+  }, [isAutoCapturing, playListeningChime, startVoiceControl]);
+
+  const handleTouchEnd = useCallback(() => {
+    stopVoiceControl();
+  }, [stopVoiceControl]);
+
+  // Get mode-specific border color class
+  const getModeBorderClass = (): string => {
+    if (!isAutoCapturing) return "";
+    switch (commandMode) {
+      case "currency": return "ring-4 ring-ios-green/70 ring-inset";
+      case "finder": return "ring-4 ring-yellow-400/70 ring-inset animate-pulse";
+      case "standard": return "ring-4 ring-ios-blue/50 ring-inset";
+      default: return "";
+    }
+  };
+
   const getStatusText = () => {
-    if (analysisState === "analyzing") return "Processing visual context...";
-    if (analysisState === "warning") return "Hazard detected - alert active";
-    if (analysisState === "success") return "Analysis complete";
-    if (analysisState === "error") return "Error - check settings";
-    if (isAutoCapturing) return mode === "reader" ? "Reading text..." : "Live scanning active";
-    return mode === "reader" ? "Tap Start to read text" : "Tap Start to begin scanning";
+    if (isVoiceControlListening) return `Listening... "${voiceTranscript || ""}"`;
+    if (analysisState === "analyzing") return "Processing...";
+    if (analysisState === "warning") return "⚠ Hazard detected";
+    if (analysisState === "error") return "Error — retrying";
+    if (isAutoCapturing) {
+      if (commandMode === "currency") return "💰 Currency Mode";
+      if (commandMode === "finder") return `🔍 Searching for: ${targetItem}`;
+      return "👁 Scanning";
+    }
+    return "Touch anywhere to start";
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className={cn("min-h-screen bg-background flex flex-col relative", getModeBorderClass())}>
       {/* Live Camera Background */}
       <LiveCamera
         ref={cameraRef}
@@ -430,33 +485,42 @@ const Index = () => {
         lastVoiceCommand={lastCommand}
       />
 
-      {/* Dynamic Island - elevated above camera */}
-      <div className={`flex justify-center pt-4 pb-6 relative z-10 ${showWarning ? "mt-16" : ""}`}>
-        <DynamicIsland status={analysisState} priority={priority} />
+      {/* Dynamic Island */}
+      <div className={`flex justify-center pt-4 pb-2 relative z-10 ${showWarning ? "mt-16" : ""}`}>
+        <DynamicIsland status={analysisState} priority={priority} commandMode={commandMode} />
       </div>
 
-      {/* Mode Toggle */}
-      <div className="flex justify-center relative z-10 mb-4">
-        <ModeToggle 
-          mode={mode} 
-          onModeChange={setMode}
-          disabled={isAutoCapturing}
-        />
-      </div>
+      {/* Settings button — small, top-right corner */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setSettingsOpen(true);
+        }}
+        className="fixed top-4 right-16 z-30 w-10 h-10 rounded-full bg-surface/60 backdrop-blur-xl border border-glass-border flex items-center justify-center"
+        aria-label="Settings"
+      >
+        <Settings className="w-5 h-5 text-muted-foreground" />
+      </button>
 
-      {/* Status Text Overlay */}
-      <div className="flex-1 flex items-end justify-center px-4 pb-56 relative z-10">
-        <div className="w-full max-w-sm">
-          <div className="text-center glass-panel super-ellipse-sm p-4">
-            <h1 className="text-xl font-semibold tracking-tighter text-foreground drop-shadow-lg">
-              NeuroNarrator
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1 tracking-tight drop-shadow-lg">
-              {getStatusText()}
-            </p>
-          </div>
+      {/* Status text */}
+      <div className="flex justify-center px-4 pt-2 relative z-10">
+        <div className="glass-panel super-ellipse-sm px-4 py-2">
+          <p className="text-sm text-muted-foreground text-center tracking-tight">
+            {getStatusText()}
+          </p>
         </div>
       </div>
+
+      {/* Push-to-Talk Overlay — full screen touch target */}
+      <PushToTalkOverlay
+        isListening={isVoiceControlListening}
+        isActive={isAutoCapturing}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onStartStream={toggleAutoCapture}
+        transcript={voiceTranscript}
+        commandMode={commandMode}
+      />
 
       {/* Caption Display */}
       <CaptionDisplay
@@ -474,20 +538,10 @@ const Index = () => {
         currentDots={currentDots}
       />
 
-      {/* Control Deck */}
-      <ControlDeck
-        isActive={isAutoCapturing}
-        onToggle={toggleAutoCapture}
-        onSettingsClick={() => setSettingsOpen(true)}
-        onAnalyze={() => {}}
-        hasImage={true}
-        isAnalyzing={analysisState === "analyzing"}
-      />
-
       {/* Settings Modal */}
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-      {/* Add Person Modal (still available for manual use / relationship customization) */}
+      {/* Add Person Modal */}
       <AddPersonModal
         isOpen={addPersonOpen}
         onClose={() => setAddPersonOpen(false)}
