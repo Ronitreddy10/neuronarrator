@@ -63,6 +63,7 @@ const Index = () => {
     startListening: startVoiceControl,
     stopListening: stopVoiceControl,
     setCommandMode,
+    setTargetItem,
   } = useVoiceControl();
 
   // Map commandMode to VisionMode
@@ -145,11 +146,30 @@ const Index = () => {
     speak("All faces cleared from memory.", 5, {});
   }, [clearAllFaces, speak]);
 
-  // Always-on voice command listener (active when scanning)
+  // Handle mode switching from always-on voice command
+  const handleModeSwitch = useCallback((newMode: "standard" | "currency" | "finder", item?: string) => {
+    console.log("[ModeSwitch] Hands-free mode switch:", newMode, item);
+    setCommandMode(newMode as CommandMode);
+    if (newMode === "finder" && item) {
+      setTargetItem(item);
+      speak(`Finder Mode. Looking for ${item}.`, 5, {});
+    } else if (newMode === "currency") {
+      speak("Currency Mode. Show me the notes.", 5, {});
+    } else {
+      speak("Standard Mode. Describing scene.", 5, {});
+    }
+    // Vibrate for confirmation
+    if ("vibrate" in navigator) {
+      try { navigator.vibrate([100, 50, 100]); } catch {}
+    }
+  }, [setCommandMode, setTargetItem, speak]);
+
+  // Always-on voice command listener (active when scanning, paused during push-to-talk)
   const { isListening: isVoiceListening, lastCommand, forceRestart: forceRestartVoice } = useVoiceCommand({
     onRememberCommand: handleVoiceRemember,
     onClearCommand: handleVoiceClear,
-    enabled: isAutoCapturing,
+    onModeSwitch: handleModeSwitch,
+    enabled: isAutoCapturing && !isVoiceControlListening,
   });
 
   // Kick the next capture

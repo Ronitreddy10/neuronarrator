@@ -65,23 +65,44 @@ export const DynamicIsland = ({ status, priority = 0, commandMode = "standard" }
     }
   };
 
+  // Mode badge text
+  const getModeBadge = () => {
+    if (commandMode === "currency") return "💰 CURRENCY";
+    if (commandMode === "finder") return "🔍 FINDER";
+    return null;
+  };
+
+  const modeBadge = getModeBadge();
+
   return (
-    <div className="dynamic-island shadow-island">
-      <div className="flex items-center gap-2">
-        <div
-          className={cn(
-            "w-2 h-2 rounded-full transition-colors duration-300",
-            getStatusDotClass()
-          )}
-        />
-        <span
-          className={cn(
-            "text-xs font-medium tracking-tight transition-colors duration-300",
-            getStatusTextClass()
-          )}
-        >
-          {getStatusText()}
-        </span>
+    <div className="flex flex-col items-center gap-2">
+      {/* Mode badge — always visible when in special mode */}
+      {modeBadge && (
+        <div className={cn(
+          "px-3 py-1 rounded-full text-xs font-bold tracking-wider",
+          commandMode === "currency" && "bg-ios-green/20 text-ios-green border border-ios-green/40",
+          commandMode === "finder" && "bg-yellow-400/20 text-yellow-400 border border-yellow-400/40 animate-pulse",
+        )}>
+          {modeBadge}
+        </div>
+      )}
+      <div className="dynamic-island shadow-island">
+        <div className="flex items-center gap-2">
+          <div
+            className={cn(
+              "w-2 h-2 rounded-full transition-colors duration-300",
+              getStatusDotClass()
+            )}
+          />
+          <span
+            className={cn(
+              "text-xs font-medium tracking-tight transition-colors duration-300",
+              getStatusTextClass()
+            )}
+          >
+            {getStatusText()}
+          </span>
+        </div>
       </div>
     </div>
   );
