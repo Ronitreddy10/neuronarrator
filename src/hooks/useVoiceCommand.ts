@@ -4,9 +4,10 @@ import { useRef, useCallback, useEffect, useState } from "react";
  * Always-on voice command listener using the browser's free SpeechRecognition API.
  * Listens for "neuro remember [name]" wake phrase to register faces hands-free.
  * Also supports "neuro forget all" to clear faces.
+ *
+ * Robust matching handles common mis-transcriptions on mobile.
  */
 
-// Extend Window for webkit prefix
 interface SpeechRecognitionEvent {
   results: SpeechRecognitionResultList;
   resultIndex: number;
@@ -17,8 +18,39 @@ type SpeechRecognitionErrorEvent = {
   message?: string;
 };
 
-const WAKE_PHRASE = "neuro remember";
-const CLEAR_PHRASE = "neuro forget all";
+// All patterns that SpeechRecognition might hear for "neuro remember"
+const REMEMBER_PATTERNS = [
+  "neuro remember",
+  "neuro, remember",
+  "neural remember",
+  "neuro remembered",
+  "neuro remeber",
+  "neuro member",
+  "nero remember",
+  "nero remeber",
+  "neuro number",
+  "neural member",
+  "new remember",
+  "neuro rember",
+  "neuro remembar",
+  "neuro remembers",
+  "neuro rimember",
+  "mirror remember",
+  "nero member",
+  "nero number",
+  "your remember",
+  "you remember",
+  "euro remember",
+];
+
+const CLEAR_PATTERNS = [
+  "neuro forget all",
+  "neural forget all",
+  "nero forget all",
+  "neuro forget everything",
+  "neuro clear all",
+  "neural clear all",
+];
 
 interface UseVoiceCommandOptions {
   onRememberCommand: (name: string) => void;
@@ -32,107 +64,132 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
   const recognitionRef = useRef<any>(null);
   const isStoppedManuallyRef = useRef(false);
   const isRunningRef = useRef(false);
+  const restartTimeoutRef = useRef<number | null>(null);
+  const consecutiveErrorsRef = useRef(0);
+
+  const clearRestartTimeout = useCallback(() => {
+    if (restartTimeoutRef.current) {
+      window.clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+  }, []);
 
   const startListening = useCallback(() => {
-    // Check browser support
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      console.warn("SpeechRecognition not supported in this browser");
+      console.warn("[VoiceCmd] SpeechRecognition not supported in this browser");
       return;
     }
 
     // Don't restart if already running
     if (isRunningRef.current) return;
-    
+
+    clearRestartTimeout();
+
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
       } catch (_) {}
+      recognitionRef.current = null;
     }
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = true;
+    recognition.interimResults = false; // Only final results — less noise, more reliable
     recognition.lang = "en-IN";
-    recognition.maxAlternatives = 3;
+    recognition.maxAlternatives = 5; // More alternatives = better chance of catching the phrase
 
     recognition.onstart = () => {
       isRunningRef.current = true;
+      consecutiveErrorsRef.current = 0;
       setIsListening(true);
-      console.log("Voice command listener started");
+      console.log("[VoiceCmd] Listener started");
     };
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      // Check all results from the current batch
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
-        if (!result.isFinal) continue; // Only process final results
-        
-        // Check all alternatives for the best match
+        if (!result.isFinal) continue;
+
+        // Check ALL alternatives
         for (let j = 0; j < result.length; j++) {
           const transcript = result[j].transcript.toLowerCase().trim();
-          console.log("Voice heard:", transcript);
+          console.log(`[VoiceCmd] Heard (alt ${j}, conf ${result[j].confidence.toFixed(2)}):`, transcript);
 
           // Check for "neuro remember [name]"
-          if (transcript.includes("neuro remember") || transcript.includes("neuro, remember") || transcript.includes("neural remember")) {
-            // Extract name after the wake phrase
-            let name = "";
-            const patterns = ["neuro remember", "neuro, remember", "neural remember", "neuro remembered"];
-            for (const pattern of patterns) {
-              const idx = transcript.indexOf(pattern);
-              if (idx !== -1) {
-                name = transcript.slice(idx + pattern.length).trim();
-                break;
+          for (const pattern of REMEMBER_PATTERNS) {
+            const idx = transcript.indexOf(pattern);
+            if (idx !== -1) {
+              let name = transcript.slice(idx + pattern.length).trim();
+
+              // Clean up the name
+              name = name
+                .replace(/[.!?,;:'"]/g, "")
+                .trim();
+
+              if (name && name.length >= 2) {
+                const cleanName = name
+                  .split(" ")
+                  .filter(w => w.length > 0)
+                  .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                  .join(" ");
+
+                console.log("[VoiceCmd] ✅ REMEMBER command detected ->", cleanName);
+                setLastCommand(`Remember: ${cleanName}`);
+                onRememberCommand(cleanName);
+                return;
               }
-            }
-
-            if (name && name.length >= 2) {
-              // Capitalize the name
-              const cleanName = name
-                .replace(/[.!?,;:]/g, "")
-                .trim()
-                .split(" ")
-                .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-                .join(" ");
-
-              console.log("Voice command: REMEMBER ->", cleanName);
-              setLastCommand(`Remember: ${cleanName}`);
-              onRememberCommand(cleanName);
-              return;
             }
           }
 
           // Check for "neuro forget all"
-          if (transcript.includes("neuro forget all") || transcript.includes("neural forget all")) {
-            console.log("Voice command: FORGET ALL");
-            setLastCommand("Forget all faces");
-            onClearCommand();
-            return;
+          for (const pattern of CLEAR_PATTERNS) {
+            if (transcript.includes(pattern)) {
+              console.log("[VoiceCmd] ✅ FORGET ALL command detected");
+              setLastCommand("Forget all faces");
+              onClearCommand();
+              return;
+            }
           }
         }
       }
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      // "no-speech" and "aborted" are normal - just restart
       if (event.error === "no-speech" || event.error === "aborted") {
+        // Normal — don't count as real error
         return;
       }
-      console.warn("Voice command error:", event.error);
+      consecutiveErrorsRef.current += 1;
+      console.warn("[VoiceCmd] Error:", event.error, `(consecutive: ${consecutiveErrorsRef.current})`);
     };
 
     recognition.onend = () => {
       isRunningRef.current = false;
       setIsListening(false);
-      // Auto-restart unless manually stopped — longer delay to avoid spam
+      console.log("[VoiceCmd] Listener ended");
+
+      // Auto-restart unless manually stopped
       if (!isStoppedManuallyRef.current && enabled) {
-        setTimeout(() => {
+        // Back off if we're getting too many consecutive errors
+        const delay = consecutiveErrorsRef.current > 3 ? 3000 : 800;
+        clearRestartTimeout();
+        restartTimeoutRef.current = window.setTimeout(() => {
           if (!isStoppedManuallyRef.current && enabled && !isRunningRef.current) {
+            console.log("[VoiceCmd] Auto-restarting listener...");
             try {
               recognition.start();
-            } catch (_) {}
+            } catch (err) {
+              console.warn("[VoiceCmd] Restart failed:", err);
+              // Try creating a fresh instance after a delay
+              restartTimeoutRef.current = window.setTimeout(() => {
+                if (!isStoppedManuallyRef.current && enabled && !isRunningRef.current) {
+                  startListening();
+                }
+              }, 2000);
+            }
           }
-        }, 1000);
+        }, delay);
       }
     };
 
@@ -142,13 +199,18 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
     try {
       recognition.start();
     } catch (err) {
-      console.error("Failed to start voice command listener:", err);
+      console.error("[VoiceCmd] Failed to start:", err);
+      // Retry after delay
+      restartTimeoutRef.current = window.setTimeout(() => {
+        if (enabled && !isRunningRef.current) startListening();
+      }, 2000);
     }
-  }, [onRememberCommand, onClearCommand, enabled]);
+  }, [onRememberCommand, onClearCommand, enabled, clearRestartTimeout]);
 
   const stopListening = useCallback(() => {
     isStoppedManuallyRef.current = true;
     isRunningRef.current = false;
+    clearRestartTimeout();
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -156,7 +218,24 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
       recognitionRef.current = null;
     }
     setIsListening(false);
-  }, []);
+  }, [clearRestartTimeout]);
+
+  // Force restart — call this externally to ensure the listener is alive
+  const forceRestart = useCallback(() => {
+    if (!enabled) return;
+    console.log("[VoiceCmd] Force-restarting listener");
+    isStoppedManuallyRef.current = false;
+    clearRestartTimeout();
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (_) {}
+      recognitionRef.current = null;
+    }
+    isRunningRef.current = false;
+    // Small delay to let the old instance fully stop
+    restartTimeoutRef.current = window.setTimeout(() => {
+      startListening();
+    }, 300);
+  }, [enabled, clearRestartTimeout, startListening]);
 
   // Auto-start/stop based on enabled flag
   useEffect(() => {
@@ -168,5 +247,19 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
     return () => stopListening();
   }, [enabled, startListening, stopListening]);
 
-  return { isListening, lastCommand };
+  // Periodic health check — if we should be listening but aren't, restart
+  useEffect(() => {
+    if (!enabled) return;
+
+    const healthCheck = window.setInterval(() => {
+      if (enabled && !isRunningRef.current && !isStoppedManuallyRef.current) {
+        console.log("[VoiceCmd] Health check: listener not running, restarting...");
+        startListening();
+      }
+    }, 8000);
+
+    return () => window.clearInterval(healthCheck);
+  }, [enabled, startListening]);
+
+  return { isListening, lastCommand, forceRestart };
 }
