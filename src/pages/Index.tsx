@@ -110,7 +110,7 @@ const Index = () => {
   }, [clearAllFaces, speak]);
 
   // Always-on voice command listener (active when scanning)
-  const { isListening: isVoiceListening, lastCommand } = useVoiceCommand({
+  const { isListening: isVoiceListening, lastCommand, forceRestart: forceRestartVoice } = useVoiceCommand({
     onRememberCommand: handleVoiceRemember,
     onClearCommand: handleVoiceClear,
     enabled: isAutoCapturing,
@@ -227,6 +227,9 @@ const Index = () => {
           // Start a new pause window
           unknownFacePauseUntilRef.current = now + UNKNOWN_FACE_PAUSE_MS;
           console.log("[Loop] Unknown face detected — pausing TTS for 5s for voice registration");
+          // Stop any active TTS so the mic is clear, then force-restart voice listener
+          stop();
+          forceRestartVoice();
         }
 
         if (now < unknownFacePauseUntilRef.current) {
@@ -289,7 +292,7 @@ const Index = () => {
       isAnalyzingRef.current = false;
       analysisStartedAtRef.current = 0;
     }
-  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isBusy]);
+  }, [speak, stop, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isBusy, forceRestartVoice]);
 
   const startStream = useCallback(() => {
     if (isAutoCapturing) return;
