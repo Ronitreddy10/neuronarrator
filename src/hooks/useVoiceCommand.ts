@@ -67,6 +67,13 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
   const restartTimeoutRef = useRef<number | null>(null);
   const consecutiveErrorsRef = useRef(0);
 
+  // CRITICAL: Store callbacks in refs so SpeechRecognition doesn't restart
+  // when parent re-renders with new callback references
+  const onRememberRef = useRef(onRememberCommand);
+  const onClearRef = useRef(onClearCommand);
+  useEffect(() => { onRememberRef.current = onRememberCommand; }, [onRememberCommand]);
+  useEffect(() => { onClearRef.current = onClearCommand; }, [onClearCommand]);
+
   const clearRestartTimeout = useCallback(() => {
     if (restartTimeoutRef.current) {
       window.clearTimeout(restartTimeoutRef.current);
@@ -136,7 +143,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
 
                 console.log("[VoiceCmd] ✅ REMEMBER command detected ->", cleanName);
                 setLastCommand(`Remember: ${cleanName}`);
-                onRememberCommand(cleanName);
+                onRememberRef.current(cleanName);
                 return;
               }
             }
@@ -147,7 +154,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
             if (transcript.includes(pattern)) {
               console.log("[VoiceCmd] ✅ FORGET ALL command detected");
               setLastCommand("Forget all faces");
-              onClearCommand();
+              onClearRef.current();
               return;
             }
           }
@@ -205,7 +212,7 @@ export function useVoiceCommand({ onRememberCommand, onClearCommand, enabled }: 
         if (enabled && !isRunningRef.current) startListening();
       }, 2000);
     }
-  }, [onRememberCommand, onClearCommand, enabled, clearRestartTimeout]);
+  }, [enabled, clearRestartTimeout]);
 
   const stopListening = useCallback(() => {
     isStoppedManuallyRef.current = true;
