@@ -43,6 +43,7 @@ const Index = () => {
 
   // Unknown-face pause: suppress TTS for 5s so user can say "neuro remember [name]"
   const unknownFacePauseUntilRef = useRef<number>(0);
+  const lastUnknownDescriptorRef = useRef<any>(null);
   const UNKNOWN_FACE_PAUSE_MS = 5000;
 
   const { speak, stop, isSpeaking, isBusy } = useNeuroVoice();
@@ -65,6 +66,9 @@ const Index = () => {
     generateSpeechText
   } = useFaceRecognition();
 
+  // Keep ref in sync so handleVoiceRemember doesn't need lastUnknownDescriptor as a dep
+  lastUnknownDescriptorRef.current = lastUnknownDescriptor;
+
   // Load face recognition models lazily — don't block app startup on mobile
   const modelsLoadedOnce = useRef(false);
   useEffect(() => {
@@ -79,10 +83,9 @@ const Index = () => {
     console.log("[VoiceRemember] Command received for:", name);
 
     // FIRST: check if we already have an unknown face descriptor from the capture loop
-    // This avoids a race condition with detectAndMatch's isProcessingRef guard
-    if (lastUnknownDescriptor) {
+    // Use ref to avoid recreating this callback on every face detection cycle
+    if (lastUnknownDescriptorRef.current) {
       console.log("[VoiceRemember] Using existing unknown descriptor");
-      // Clear the unknown face pause so TTS resumes after registration
       unknownFacePauseUntilRef.current = 0;
       const success = await registerCurrentFace(name, "Friend");
       if (success) {
@@ -120,7 +123,7 @@ const Index = () => {
     } else {
       speak(`Couldn't save that face. Try again.`, 5, {});
     }
-  }, [isModelsLoaded, detectAndMatch, registerCurrentFace, speak, lastUnknownDescriptor]);
+  }, [isModelsLoaded, detectAndMatch, registerCurrentFace, speak]);
 
   const handleVoiceClear = useCallback(() => {
     clearAllFaces();
