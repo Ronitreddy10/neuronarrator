@@ -5,11 +5,14 @@ import { faceDB, type FaceRecord, type RelationType } from '@/lib/faceDatabase';
 // Model CDN URL
 const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
 
-// Detection options — lower minConfidence to catch more faces (default is 0.5)
-const DETECTION_OPTIONS = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.3 });
+// Primary detector: SSD MobileNet (good for frontal faces)
+const SSD_OPTIONS = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.25 });
+
+// Fallback detector: TinyFaceDetector (better for angled/side faces)
+const TINY_OPTIONS = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
 
 // Min detection score to proceed with matching (reject garbage detections)
-const MIN_DETECTION_SCORE = 0.4;
+const MIN_DETECTION_SCORE = 0.35;
 
 // Match threshold — slightly relaxed for mobile camera conditions
 const MATCH_THRESHOLD = 0.55;
@@ -151,9 +154,10 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
       try {
         console.log(`[Face] Loading models (attempt ${attempt}/${maxRetries})`);
         await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
         await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
         await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-        console.log('[Face] All models loaded successfully');
+        console.log('[Face] All models loaded (SSD + TinyFace + Landmarks + Recognition)');
         setIsModelsLoaded(true);
         setIsLoadingModels(false);
         setModelLoadError(null);
@@ -197,14 +201,23 @@ export function useFaceRecognition(): UseFaceRecognitionReturn {
     setIsProcessing(true);
 
     try {
-      // Use detectAllFaces with lowered confidence, pick the largest/best face
-      const detections = await faceapi
-        .detectAllFaces(videoElement, DETECTION_OPTIONS)
+      // Try SSD MobileNet first (best for frontal faces)
+      let detections = await faceapi
+        .detectAllFaces(videoElement, SSD_OPTIONS)
         .withFaceLandmarks()
         .withFaceDescriptors();
 
+      // If SSD found nothing, try TinyFaceDetector (better at side/angled faces)
       if (!detections || detections.length === 0) {
-        console.log('[Face] No faces detected');
+        console.log('[Face] SSD found nothing, trying TinyFaceDetector...');
+        detections = await faceapi
+          .detectAllFaces(videoElement, TINY_OPTIONS)
+          .withFaceLandmarks()
+          .withFaceDescriptors();
+      }
+
+      if (!detections || detections.length === 0) {
+        console.log('[Face] No faces detected by either detector');
         setLastMatch(null);
         return null;
       }
