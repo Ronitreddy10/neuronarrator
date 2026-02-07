@@ -39,6 +39,11 @@ const Index = () => {
   const cameraRef = useRef<LiveCameraRef>(null);
   const lastDescriptionRef = useRef<string>("");
   const captureCountRef = useRef(0);
+  const analysisStartedAtRef = useRef<number>(0);
+
+  // Unknown-face pause: suppress TTS for 5s so user can say "neuro remember [name]"
+  const unknownFacePauseUntilRef = useRef<number>(0);
+  const UNKNOWN_FACE_PAUSE_MS = 5000;
 
   const { speak, stop, isSpeaking, isBusy } = useNeuroVoice();
   const { sosPattern } = useHaptics();
@@ -128,8 +133,8 @@ const Index = () => {
     triggerNextCapture();
   }, [triggerNextCapture]);
 
-  // Watchdog: if nothing has happened for 8s, force a new capture
-  // This catches ALL failure modes: TTS silent fail, network timeout, etc.
+  // Watchdog: if nothing has happened for 5s, force a new capture
+  // Also force-resets stuck analysis after 15s
   useEffect(() => {
     if (!isAutoCapturing) {
       if (watchdogTimerRef.current) {
@@ -140,6 +145,18 @@ const Index = () => {
     }
 
     watchdogTimerRef.current = window.setInterval(() => {
+      // Force-reset stuck analysis (prevents permanent stall)
+      if (isAnalyzingRef.current && analysisStartedAtRef.current > 0) {
+        const analysisDuration = Date.now() - analysisStartedAtRef.current;
+        if (analysisDuration > 15000) {
+          console.warn("Watchdog: analysis stuck for 15s+, force-resetting");
+          isAnalyzingRef.current = false;
+          analysisStartedAtRef.current = 0;
+          setCaptureRequestId(prev => prev + 1);
+          return;
+        }
+      }
+
       if (isActiveRef.current && !isAnalyzingRef.current && !isBusy()) {
         console.log("Watchdog: forcing next capture (loop may have stalled)");
         setCaptureRequestId(prev => prev + 1);
@@ -153,7 +170,7 @@ const Index = () => {
           setCaptureRequestId(prev => prev + 1);
         }
       }
-    }, 6000);
+    }, 5000);
 
     return () => {
       if (watchdogTimerRef.current) {
@@ -170,32 +187,64 @@ const Index = () => {
     // The current speech's onEnd will trigger the next capture naturally.
     if (isBusy()) return;
     isAnalyzingRef.current = true;
+    analysisStartedAtRef.current = Date.now();
     captureCountRef.current += 1;
-    const thisCaptureNum = captureCountRef.current;
 
     setAnalysisState("analyzing");
 
     try {
       // Step 1: Face detection with 2s timeout — skip gracefully on slow devices
       let knownFaces: KnownFaceInfo[] = [];
+      let hasUnknownFace = false;
       if (isModelsLoaded) {
         const video = cameraRef.current?.getVideoElement();
         if (video && video.readyState >= 2) {
           try {
             const faceTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000));
             const match = await Promise.race([detectAndMatch(video), faceTimeout]);
-            if (match && match.known && match.context) {
-              knownFaces = [{
-                name: match.context.name,
-                relation: match.context.relation,
-                daysSinceLastSeen: match.context.daysSinceLastSeen,
-                isLongAbsence: match.context.isLongAbsence,
-              }];
+            if (match) {
+              if (match.known && match.context) {
+                knownFaces = [{
+                  name: match.context.name,
+                  relation: match.context.relation,
+                  daysSinceLastSeen: match.context.daysSinceLastSeen,
+                  isLongAbsence: match.context.isLongAbsence,
+                }];
+              } else if (!match.known) {
+                hasUnknownFace = true;
+              }
             }
           } catch (faceErr) {
             console.warn("Face detection skipped:", faceErr);
           }
         }
+      }
+
+      // Unknown face detected → pause TTS for 5s so user can say "neuro remember [name]"
+      if (hasUnknownFace) {
+        const now = Date.now();
+        if (unknownFacePauseUntilRef.current === 0 || now > unknownFacePauseUntilRef.current) {
+          // Start a new pause window
+          unknownFacePauseUntilRef.current = now + UNKNOWN_FACE_PAUSE_MS;
+          console.log("[Loop] Unknown face detected — pausing TTS for 5s for voice registration");
+        }
+
+        if (now < unknownFacePauseUntilRef.current) {
+          // We're in the pause window — skip TTS, trigger next capture after a short delay
+          setAnalysisState("success");
+          setCaptionText("Unknown face detected — say \"Neuro remember [name]\" to save");
+          isAnalyzingRef.current = false;
+          analysisStartedAtRef.current = 0;
+          setTimeout(() => {
+            if (isActiveRef.current && !isAnalyzingRef.current) {
+              setCaptureRequestId(prev => prev + 1);
+            }
+          }, 1500);
+          return;
+        }
+      } else {
+        // Known or no face — reset the pause
+        unknownFacePauseUntilRef.current = 0;
       }
 
       // Step 2: Send image + face names + previous description to vision API
@@ -238,39 +287,69 @@ const Index = () => {
       speak("Hmm, something went wrong. Retrying.", 5, { onEnd: onSpeechEnd });
     } finally {
       isAnalyzingRef.current = false;
+      analysisStartedAtRef.current = 0;
     }
   }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isBusy]);
 
-  const toggleAutoCapture = () => {
+  const startStream = useCallback(() => {
+    if (isAutoCapturing) return;
+    setCameraEnabled(true);
+    setIsAutoCapturing(true);
+    isActiveRef.current = true;
+    unknownFacePauseUntilRef.current = 0;
+
+    // Unlock audio for TTS (non-blocking)
+    unlockAudioForMobile();
+
+    // Remember that user granted permissions — auto-start next time
+    try { localStorage.setItem('neuro-autostart', 'true'); } catch {}
+
+    // Trigger first capture after camera initializes (1.5s)
+    setTimeout(() => {
+      if (isActiveRef.current) {
+        setCaptureRequestId(1);
+      }
+    }, 1500);
+  }, [isAutoCapturing]);
+
+  const stopStream = useCallback(() => {
+    setIsAutoCapturing(false);
+    isActiveRef.current = false;
+    captureCountRef.current = 0;
+    speechStartedAtRef.current = 0;
+    analysisStartedAtRef.current = 0;
+    unknownFacePauseUntilRef.current = 0;
+    setAnalysisState("idle");
+    setCaptionText("");
+    setTextContent("");
+    setPriority(0);
+    setShowWarning(false);
+    stop();
+    stopHaptic();
+  }, [stop, stopHaptic]);
+
+  const toggleAutoCapture = useCallback(() => {
     if (isAutoCapturing) {
-      setIsAutoCapturing(false);
-      isActiveRef.current = false;
-      captureCountRef.current = 0;
-      speechStartedAtRef.current = 0;
-      setAnalysisState("idle");
-      setCaptionText("");
-      setTextContent("");
-      setPriority(0);
-      setShowWarning(false);
-      stop();
-      stopHaptic();
+      stopStream();
     } else {
-      // Enable camera and start scanning
-      setCameraEnabled(true);
-      setIsAutoCapturing(true);
-      isActiveRef.current = true;
-      
-      // Unlock audio for TTS (non-blocking)
-      unlockAudioForMobile();
-      
-      // Trigger first capture after camera initializes (1.5s)
-      setTimeout(() => {
-        if (isActiveRef.current) {
-          setCaptureRequestId(1);
-        }
-      }, 1500);
+      startStream();
     }
-  };
+  }, [isAutoCapturing, startStream, stopStream]);
+
+  // Auto-start on mount if permissions were previously granted
+  useEffect(() => {
+    try {
+      const shouldAutoStart = localStorage.getItem('neuro-autostart') === 'true';
+      if (shouldAutoStart) {
+        console.log("[AutoStart] Previously granted permissions detected — auto-starting stream");
+        // Small delay to ensure component is fully mounted
+        const timer = setTimeout(() => {
+          startStream();
+        }, 500);
+        return () => clearTimeout(timer);
+      }
+    } catch {}
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRegisterFace = async (name: string, relation: RelationType): Promise<boolean> => {
     const success = await registerCurrentFace(name, relation);
