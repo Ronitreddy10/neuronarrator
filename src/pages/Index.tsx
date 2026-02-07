@@ -40,7 +40,7 @@ const Index = () => {
   const lastDescriptionRef = useRef<string>("");
   const captureCountRef = useRef(0);
 
-  const { speak, stop, isSpeaking } = useNeuroVoice();
+  const { speak, stop, isSpeaking, isBusy } = useNeuroVoice();
   const { sosPattern } = useHaptics();
   const { playHapticMessage, stopHaptic, isPlaying: isHapticPlaying, currentChar, currentDots } = useHapticBraille();
   const { playHazardSound } = useHazardSound();
@@ -114,14 +114,14 @@ const Index = () => {
   // Kick the next capture — sole trigger for the speech→capture loop
   const triggerNextCapture = useCallback(() => {
     speechStartedAtRef.current = 0;
-    if (isActiveRef.current && !isSpeaking()) {
+    if (isActiveRef.current && !isBusy()) {
       setTimeout(() => {
         if (isActiveRef.current && !isAnalyzingRef.current) {
           setCaptureRequestId(prev => prev + 1);
         }
       }, 300);
     }
-  }, [isSpeaking]);
+  }, [isBusy]);
 
   // Called when speech finishes — triggers next capture
   const onSpeechEnd = useCallback(() => {
@@ -140,10 +140,10 @@ const Index = () => {
     }
 
     watchdogTimerRef.current = window.setInterval(() => {
-      if (isActiveRef.current && !isAnalyzingRef.current && !isSpeaking()) {
+      if (isActiveRef.current && !isAnalyzingRef.current && !isBusy()) {
         console.log("Watchdog: forcing next capture (loop may have stalled)");
         setCaptureRequestId(prev => prev + 1);
-      } else if (isActiveRef.current && isSpeaking() && speechStartedAtRef.current > 0) {
+      } else if (isActiveRef.current && isBusy() && speechStartedAtRef.current > 0) {
         // If speech has been going on for more than 12s, something is stuck — force next
         const elapsed = Date.now() - speechStartedAtRef.current;
         if (elapsed > 12000) {
@@ -161,14 +161,14 @@ const Index = () => {
         watchdogTimerRef.current = null;
       }
     };
-  }, [isAutoCapturing, isSpeaking, stop]);
+  }, [isAutoCapturing, isBusy, stop]);
 
   const handleCapture = useCallback(async (base64: string): Promise<void> => {
     // Prevent concurrent requests
     if (isAnalyzingRef.current) return;
-    // Smooth transition: if TTS is still speaking, skip this frame.
+    // Smooth transition: if TTS is busy (loading or speaking), skip this frame.
     // The current speech's onEnd will trigger the next capture naturally.
-    if (isSpeaking()) return;
+    if (isBusy()) return;
     isAnalyzingRef.current = true;
     captureCountRef.current += 1;
     const thisCaptureNum = captureCountRef.current;
@@ -239,7 +239,7 @@ const Index = () => {
     } finally {
       isAnalyzingRef.current = false;
     }
-  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isSpeaking]);
+  }, [speak, sosPattern, playHapticMessage, playHazardSound, mode, onSpeechEnd, triggerNextCapture, isModelsLoaded, detectAndMatch, isBusy]);
 
   const toggleAutoCapture = () => {
     if (isAutoCapturing) {

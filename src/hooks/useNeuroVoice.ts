@@ -69,6 +69,8 @@ export const useNeuroVoice = () => {
   const safetyTimerRef = useRef<number | null>(null);
   // Track whether audio is actively playing (NOT loading)
   const isPlayingRef = useRef(false);
+  // Track whether TTS is busy (loading OR playing) — used by external callers to avoid interrupting
+  const isBusyRef = useRef(false);
 
   const clearTimers = useCallback(() => {
     if (safetyTimerRef.current) {
@@ -80,6 +82,7 @@ export const useNeuroVoice = () => {
   const fireOnEnd = useCallback(() => {
     clearTimers();
     isPlayingRef.current = false;
+    isBusyRef.current = false;
     const cb = onEndCallbackRef.current;
     onEndCallbackRef.current = null;
     if (cb) cb();
@@ -101,6 +104,7 @@ export const useNeuroVoice = () => {
     }
     window.speechSynthesis?.cancel();
     isPlayingRef.current = false;
+    isBusyRef.current = false;
   }, [clearTimers]);
 
   const speak = useCallback(async (text: string, priority: number = 5, options: SpeakOptions = {}) => {
@@ -118,6 +122,7 @@ export const useNeuroVoice = () => {
     const thisGen = speakGeneration;
 
     onEndCallbackRef.current = options.onEnd || null;
+    isBusyRef.current = true;
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -250,7 +255,12 @@ export const useNeuroVoice = () => {
     return window.speechSynthesis?.speaking ?? false;
   }, []);
 
+  // True when TTS is loading OR playing — use this to guard capture loops
+  const isBusy = useCallback(() => {
+    return isBusyRef.current;
+  }, []);
+
   const isLoading = useCallback(() => false, []);
 
-  return { speak, stop, isSpeaking, isLoading };
+  return { speak, stop, isSpeaking, isBusy, isLoading };
 };
