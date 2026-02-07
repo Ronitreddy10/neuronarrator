@@ -5,8 +5,11 @@
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
  };
  
- // Current recommended vision model from Groq
- const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+// Vision models — try primary first, fallback if over capacity
+const VISION_MODELS = [
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "meta-llama/llama-4-maverick-17b-128e-instruct",
+];
  
 const GENERAL_PROMPT = `You're a chill, caring friend walking beside a blind person. Talk like a real human — casual, warm, not robotic. No jargon, no "I observe", no "the image shows". Just talk to them like you're right there.
 
@@ -95,55 +98,120 @@ CRITICAL: Output ONLY the JSON object. No markdown, no backticks, no extra words
       userPrompt += `\n\nLast time you said: "${previousDescription}"\nIf the scene is basically the same, keep it super brief or mention something different. Don't repeat yourself.`;
     }
 
-    console.log("Calling Groq vision API with model:", VISION_MODEL, "mode:", mode);
- 
-     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-       method: "POST",
-       headers: {
-         "Authorization": `Bearer ${GROQ_API_KEY}`,
-         "Content-Type": "application/json",
-       },
-       body: JSON.stringify({
-         model: VISION_MODEL,
-         messages: [
-           {
-             role: "system",
-            content: systemPrompt,
-           },
-           {
-             role: "user",
-             content: [
-               {
-                 type: "image_url",
-                 image_url: {
-                   url: imageBase64.startsWith("data:")
-                     ? imageBase64
-                     : `data:image/jpeg;base64,${imageBase64}`,
-                 },
-               },
-               {
-                 type: "text",
-                text: userPrompt,
-               },
-             ],
-           },
-         ],
-        max_tokens: 1000,
-         temperature: 0.3,
-       }),
-     });
- 
-     if (!response.ok) {
-       const errorText = await response.text();
-       console.error("Groq API error:", response.status, errorText);
-       return new Response(
-         JSON.stringify({ error: `Vision API error: ${response.status}`, details: errorText }),
-         { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-       );
-     }
- 
-     const data = await response.json();
-     console.log("Groq response received");
+    // Try each Groq model in order until one succeeds
+    let response: Response | null = null;
+    let lastError = "";
+    let usedModel = "";
+
+    for (const model of VISION_MODELS) {
+      console.log("Trying Groq model:", model, "mode:", mode);
+      
+      try {
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${GROQ_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "image_url",
+                    image_url: {
+                      url: imageBase64.startsWith("data:")
+                        ? imageBase64
+                        : `data:image/jpeg;base64,${imageBase64}`,
+                    },
+                  },
+                  { type: "text", text: userPrompt },
+                ],
+              },
+            ],
+            max_tokens: 1000,
+            temperature: 0.3,
+          }),
+        });
+
+        if (res.ok) {
+          response = res;
+          usedModel = model;
+          break;
+        }
+
+        const errorText = await res.text();
+        console.warn(`Model ${model} failed (${res.status}), trying next...`);
+        lastError = `${model}: ${res.status}`;
+      } catch (fetchErr) {
+        console.warn(`Model ${model} fetch error:`, fetchErr);
+        lastError = `${model}: fetch error`;
+      }
+    }
+
+    // ── Ultimate fallback: Lovable AI Gateway (Gemini) ──
+    if (!response) {
+      const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+      if (LOVABLE_API_KEY) {
+        console.log("All Groq models down, falling back to Lovable AI Gateway (Gemini)");
+        try {
+          const geminiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "google/gemini-2.5-flash",
+              messages: [
+                { role: "system", content: systemPrompt },
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "image_url",
+                      image_url: {
+                        url: imageBase64.startsWith("data:")
+                          ? imageBase64
+                          : `data:image/jpeg;base64,${imageBase64}`,
+                      },
+                    },
+                    { type: "text", text: userPrompt },
+                  ],
+                },
+              ],
+              max_tokens: 1000,
+              temperature: 0.3,
+            }),
+          });
+
+          if (geminiRes.ok) {
+            response = geminiRes;
+            usedModel = "google/gemini-2.5-flash (fallback)";
+          } else {
+            const errText = await geminiRes.text();
+            console.error("Gemini fallback also failed:", geminiRes.status, errText.slice(0, 200));
+          }
+        } catch (geminiErr) {
+          console.error("Gemini fallback fetch error:", geminiErr);
+        }
+      }
+    }
+
+    if (!response) {
+      console.error("All models failed. Last error:", lastError);
+      return new Response(
+        JSON.stringify({ error: "All vision models are currently unavailable. Please try again in a moment." }),
+        { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    console.log("Vision response received from model:", usedModel);
+
+    const data = await response.json();
  
       let content = data.choices?.[0]?.message?.content || "";
       
