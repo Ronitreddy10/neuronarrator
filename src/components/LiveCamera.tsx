@@ -28,7 +28,9 @@ export const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>(({
   cameraEnabled,
 }, ref) => {
   const webcamRef = useRef<Webcam>(null);
-  const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
+  // Default to "user" on desktop (MacBook etc.), "environment" on mobile
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">(isMobile ? "environment" : "user");
   const [cameraKey, setCameraKey] = useState(0);
   const [isFlipping, setIsFlipping] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
