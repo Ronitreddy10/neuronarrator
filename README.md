@@ -190,6 +190,4 @@ supabase/functions/
 
 ---
 
-## 📄 License
 
-Built with [Lovable](https://lovable.dev).
