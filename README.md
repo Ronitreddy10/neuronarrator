@@ -66,10 +66,9 @@ The entire app is designed as a **voice-first, touch-first** interface. There ar
 │  (useVoiceControl)    (analyze-image)             │
 │       ↓                              ↓            │
 │  Mode Switch         ┌──────────────────────┐    │
-│  (standard/           │  Groq Llama 4 Vision │    │
-│   currency/           │  ────────────────── │    │
-│   finder)             │  Gemini 2.5 Flash    │    │
-│                       │  (fallback)          │    │
+│  (standard/           │  Google Gemini 3     │    │
+│   currency/           │  Vision AI           │    │
+│   finder)             │  (multimodal)        │    │
 │                       └──────────────────────┘    │
 │       ↓                              ↓            │
 │  useNeuroVoice ←── description ──────┘            │
@@ -97,7 +96,7 @@ The entire app is designed as a **voice-first, touch-first** interface. There ar
 
 | Function | Purpose |
 |----------|---------|
-| `analyze-image` | Vision analysis via Groq Llama 4 (primary) → Gemini 2.5 Flash (fallback). Supports general, reader, currency, and finder system prompts. |
+| `analyze-image` | Vision analysis via Google Gemini 3 (multimodal). Supports general, reader, currency, and finder system prompts. |
 | `text-to-speech` | Converts description text to speech audio |
 | `speech-to-text` | Processes voice input for commands |
 
@@ -117,7 +116,7 @@ The entire app is designed as a **voice-first, touch-first** interface. There ar
 | **Audio Output** | Web Audio API (OscillatorNode) |
 | **Icons** | Lucide React |
 | **Backend** | Lovable Cloud (Edge Functions) |
-| **Vision AI** | Groq Llama 4 Scout/Maverick → Gemini 2.5 Flash fallback |
+| **Vision AI** | Google Gemini 3 (multimodal vision) |
 | **Routing** | React Router v6 |
 
 ---
